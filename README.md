@@ -24,15 +24,15 @@ emphasize the influential role of mutualistic interactions in shaping
 large-scale distribution patterns and driving convergence in species
 niches, spanning across phylogenetically distant clades.
 
-All content is available
-[here](https://github.com/EddiePerochon/Heliconiini_diversity).
+
+All content (including, maps, models, outputs, environmental variables rasters and stacks) is available [here](https://doi.org/10.5281/zenodo.14765686).
 
 ## Contents
 
 - [:file_folder: **controls**](controls/) directory contains plots used
   to control the quality of SDM outputs.
 
-- [:file_folder: **for_article**](figures/) directory contains graphs
+- [:file_folder: **figures**](figures/) directory contains graphs
   and figures produced for the research article.
 
 - [:file_folder: **functions**](functions/) directory contains homemade
@@ -109,5 +109,8 @@ The distribution maps generated throughout the analyses are made
 publicly available at
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10903661.svg)](https://doi.org/10.5281/zenodo.10903661)
 
-The folders with all filed generated/used throughout the analyses are publicly available at 
+The folders with all files generated/used throughout the analyses are publicly available at 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14765686.svg)](https://doi.org/10.5281/zenodo.14765686)
+
+The R scripts and input data used throughout the analyses are publicly available at 
+[github.com/EddiePerochon/Heliconiini_Diversity](https://github.com/EddiePerochon/Heliconiini_Diversity)
