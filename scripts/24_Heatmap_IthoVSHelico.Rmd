@@ -1,0 +1,997 @@
+---
+title: "24_HeatMap_IthoVSHelico"
+author: "Eddie Pérochon"
+date: "15/03/2022"
+output: html_document
+---
+
+
+##### Script 24: Bivariate heatmaps of index comparisons Heliconiini vs Ithomiini #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+
+# Plot of the six index values for each tribe with bivariate scale
+# Phylogeny plot for figure 1
+
+### Inputs
+
+# Index stacks from script 20 + 20bis for Heliconiini
+# Index stacks from Doré et al. 2021 (Diversity & Distributions) for Ithomiini
+# Phylogeny from Espeland et al. 2018 (Current Biology)
+
+###
+
+### Outputs
+# 6 Bivariate maps of index comparisons between the two tribes
+# Figure 1's phylogeny to show evolutionary distance between the two tribes
+
+
+###
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Function to compute probability of presence with multiple unit, all present at the same community
+all_presence_prob = function(x, na.rm) { 
+  y <-prod(x) # Probability of presence of all species
+  return(y) # Output
+}
+```
+
+```{r}
+rm(list = ls())
+library(raster)
+library(stringr)
+library(dplyr)
+library(rgeos)
+library(biscale)
+library(cowplot)
+library(sf)
+library(ggplot2)
+library(bivariatemaps)
+library(png)
+library(ape)
+library(ggtree)
+library(phytools)
+library(TreeTools)
+
+```
+
+
+```{r}
+# New color palette
+pal_bl_red_Mannion <- readRDS(file = "../Maps/pal_bl_red_Mannion.rds")
+
+
+
+# Load stuff for plot on Andes
+Andes_ext <- extent(c(-90, -59, -15, 14))
+Close_Andes_ext <- extent(c(-90, -67.2, -18, 14))
+
+
+envData <- readRDS(file = paste0("../input_data/envData/Var_stack_WGS84.RDS"))
+DEM <- envData[[5]]
+Andes_DEM <- crop(DEM, Andes_ext)
+Close_Andes_DEM <- crop(DEM, Close_Andes_ext)
+Andes_bbox <- as(extent(Andes_DEM), 'SpatialPolygons')
+Andes_bbox@proj4string@projargs <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs" 
+
+Andes_bbox<-spTransform(Andes_bbox, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+Andes_DEM<-projectRaster(Andes_DEM, crs=CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+Close_Andes_DEM<-projectRaster(Close_Andes_DEM, crs=CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+
+# saveRDS(Andes_bbox, file = "../input_data/Map_stuff/Andes_bbox.rds", version = "2")
+
+
+DEM<-readRDS("../input_data/envData/Envstack.rds")[[5]] #goback to moll
+
+# Load bioregions simplifiedshp
+# Central_America_shp2 <- readRDS(file = "../input_data/Map_stuff/Bioregions/Central_America_shp2.rds")
+# East_Ecuador_shp2 <- readRDS(file = "../input_data/Map_stuff/Bioregions/East_Ecuador_shp2.rds")
+# Peruvian_shp2 <- readRDS(file = "../input_data/Map_stuff/Bioregions/Peruvian_shp2.rds")
+# Mata_Atlantica_shp5 <- readRDS(file = "../input_data/Map_stuff/Bioregions/Mata_Atlantica_shp5.rds")
+# load("../input_data/envData/continent_mask.RData")
+# sea_shp<-continent_mask
+# sea_shp@data@values<-rep(1, ncell(sea_shp))
+#  for (i in 1:ncell(continent_mask)) {
+#    if(is.na(continent_mask@data@values[i])==FALSE)
+#    {
+#       sea_shp@data@values[i]<-NA
+#    }
+#  }
+# saveRDS(sea_shp, file="../input_data/Map_stuff/sea_shp.RDS")
+
+# # Load mask for continent borders, plot border, and grid
+# grid_Mollweide_out <- readRDS(file = "../input_data/Map_stuff/grid_Mollweide_out.rds")
+# large_bg_mask_Mollweide <- readRDS(file = "../input_data/envData/crop_shape.RDS")
+# bbox_sp_Mollweide <- readRDS(file = "../input_data/Map_stuff/bbox_sp_Mollweide.rds")
+# sea_shp<-readRDS(file="../input_data/Map_stuff/sea_shp.RDS")
+
+### Load maps 
+
+for(m in c("ss", "sl"))
+{
+####Helico
+sp_richness_H <- readRDS(file = paste0("../outputs/Indices_maps/tot.sp.richness_Jaccard.80.rds"))
+# sp_mean_geo_rarity <- readRDS(file = "../outputs/Indices_maps/sp.mean.rarity_Jaccard.80.rds")       # Linear weighting
+sp_mean_geo_rarity_H <- readRDS(file = "../outputs/Indices_maps/sp.mean.rarity_Leroy_Jaccard.80_contrasted.rds")   # Leroy's weighting
+Faith_PD_H <- readRDS(file = "../outputs/Indices_Maps/PD.raster_Jaccard.80.rds")
+
+load(file = paste0("../outputs/Indices_maps/ring.richness_Jaccard_",m,".80.Rdata"))
+ring_richness_H<-readAll(readRDS(paste0("../outputs/Indices_maps/ring.richness_Jaccard_",m,".80.rds")))
+# ring_mean_geo_rarity <- readRDS(file = "../outputs/Indices_maps/mimicry.mean.rarity_Jaccard.80.rds")  # Linear weighting
+ring_mean_geo_rarity_H <- readRDS(file = paste0("../outputs/Indices_maps/ring.mean.rarity_Leroy_Jaccard_",m,".80_contrasted.rds") )   # Leroy's weighting
+weighted_mean_ring_size_H <- readRDS(file = paste0("../outputs/Indices_maps/weighted_mean_ring_size_",m,".rds"))
+
+Full_indices_H <- stack(sp_richness_H, sp_mean_geo_rarity_H, Faith_PD_H, ring_richness_H, ring_mean_geo_rarity_H, weighted_mean_ring_size_H)
+names(Full_indices_H)<-c("sp_richness", "sp_mean_geo_rarity", "Faith_PD", "ring_richness", "ring_mean_geo_rarity", "weighted_mean_ring_size")
+
+for(i in 2:nlayers(Full_indices_H))
+{
+  Full_indices_H[[i]]@data@values[Full_indices_H[[i]]@data@values == 0 & is.na(Full_indices_H[[1]]@data@values) == FALSE]
+}
+
+saveRDS(Full_indices_H, paste0("../outputs/Full_Helico_indice_stack_",m,".RDS"))
+
+}
+#Itho
+load("../Ithomiini/all_indices_for_Figure.RData")
+Full_indices_I <- stack(sp_richness, sp_mean_geo_rarity, Faith_PD, ring_richness, ring_mean_geo_rarity, weighted_mean_ring_size)
+saveRDS(Full_indices_I, file="../Ithomiini/Full_indices_I_stack.RDS") 
+# 
+# for(i in 1:nlayers(Full_indices_H))
+# {
+#   H<-Full_indices_H[[i]]
+#   I<-Full_indices_I[[i]]
+#   
+#   H@data@values<-H@data@values/max(H@data@values, na.rm=T)
+#   I@data@values<-I@data@values/max(I@data@values, na.rm=T)
+#   
+#   Full_indices_H[[i]]<-H
+#   Full_indices_I[[i]]<-I
+# }
+# 
+# 
+# saveRDS(Full_indices_I, file="../Ithomiini/Full_indices_I_brick.RDS") 
+# 
+# Full_indices_I_brick<-readRDS("../Ithomiini/Full_indices_I_brick.RDS")
+# writeRaster(Full_indices_I_brick, "../Ithomiini/Full_indices_I_brick.grd")
+# writeRaster(Full_indices_I, "../Ithomiini/Full_indices_I.grd")
+
+# Full_indices_H<-brick(Full_indices_H)
+# 
+# 
+# Full_indices_I<-projectRaster(from=readAll(brick("../Ithomiini/Full_indices_I_brick.grd")), crs = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"), method="bilinear")
+Full_indices_I<-projectRaster(from=readAll(brick("../Ithomiini/Full_indices_I.grd")), crs = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"), method="bilinear")
+# 
+#  
+# Full_indices_I<-resample(Full_indices_I, Full_indices_H[[1]])
+Full_indices_I<-resample(Full_indices_I, Full_indices_H[[1]])
+saveRDS(Full_indices_I, file="../Ithomiini/Full_indices_I.RDS")
+# 
+# 
+# for(i in 1:nlayers(Full_indices_I))
+# {
+# 
+# vec_filter_I<-is.na(Full_indices_I@data@values[,i])
+# vec_filter_H<-is.na(Full_indices_H@data@values[,i])
+#   for (j in 1:length(vec_filter_H))
+#   {
+#     if(vec_filter_I[j]==TRUE && vec_filter_H[j]==TRUE)
+#     {vec_filter_I[j]<-FALSE}
+#   }
+#   
+# Full_indices_I@data@values[,i][vec_filter_I==TRUE]<-0
+# }
+#   
+# plot(Full_indices_I)
+# 
+# Indices_diff_stack<-Full_indices_H
+# for (i in 1:nlayers(Full_indices_H))
+# {
+#   Indices_diff_stack[[i]]<-(Full_indices_H[[i]]-Full_indices_I[[i]])
+# 
+# }
+# names(Indices_diff_stack)<-c("sp_richness", "sp_mean_geo_rarity", "Faith_PD", "ring_richness", "ring_mean_geo_rarity", "weighted_mean_ring_size")
+# save(Indices_diff_stack, file="../Ithomiini/Indices_diff_stack.RDATA")
+
+load("../Ithomiini/Indices_diff_stack.RDATA")
+
+
+
+```
+
+```{r}
+
+
+# 3.2/ Project all maps
+# 
+# # Put all maps in a list
+# 
+# list_all_maps <- list(sp_richness, sp_mean_geo_rarity, Faith_PD, ring_richness, ring_mean_geo_rarity, weighted_mean_ring_size)
+# names(list_all_maps) <- c("sp_richness", "sp_mean_geo_rarity", "Faith_PD", "ring_richness", "ring_mean_geo_rarity", "weighted_mean_ring_size")
+# 
+ 
+```
+
+
+```{r}
+##Corplots for indices
+names(Full_indices)<-c("Species richness", "Species rarity", "Phylogenetic diversity", "Mimicry richness", "Mimicry rarity", "Mean ring size")
+pairs(Full_indices, v=NULL, pa='pa', hist=TRUE, cor=TRUE)
+
+library(sf)
+Ecoregions<-st_read("../Ecoregions/sa_eco_l3.shp")
+Ecoregions<-Ecoregions[, c(7,10)]
+
+list_ecoregion<-levels(as.factor(Ecoregions$LEVEL1))
+sfEco<-Ecoregions[1,]
+Ecoregions=Ecoregions %>% 
+    group_by(LEVEL1) %>%
+    summarise(geometry = sf::st_union(geometry)) %>%
+    ungroup()
+Ecoregions<-st_transform(Ecoregions, crs = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+saveRDS(Ecoregions, file="../Ecoregions/EcoregionsLVL1.rds")
+
+
+Amazon_indices<-crop(Full_indices, Ecoregions[8,])
+
+Andes_indices<-crop(Full_indices, Ecoregions[5,])
+
+pairs(Amazon_indices, v=NULL, pa='pa', hist=TRUE, cor=TRUE)
+
+pairs(Andes_indices, v=NULL, pa='pa', hist=TRUE, cor=TRUE)
+```
+
+
+```{r}
+### Plot function for tribes map, specific top add cooccurence ####
+
+{
+  tribes_map_Mollweide <- function(x,                                    # Raster to map
+                                  color_palette=colors_tribe,# Color palette
+                                  main_title,                           # Main title
+                                  main_title_cex = 1.5,                 # Main title size
+                                  
+                                  xlim = c(-5457, 4953),   # Limit of plot on x-axis (Longitude)
+                                  ylim = c(-4495, 5705),    # Limit of plot on y-axis (Latitude)
+                                  axis_cex = 1.4,             # Axes size
+                                  
+                                  xlab = "",                # X-axis label
+                                  ylab = "",                # Y-axis label
+                                  x_axis_breaks = c(-3930, -2170, -420, 1500, 3050),            # X-axis tick breaks
+                                  y_axis_breaks = c(-3650, -2450, -1220, 0, 1230, 2445, 3660, 4890),        # Y-axis tick breaks
+                                  x_axis_labels = c("120°E", "100°E", "80°E", "60°E", "40°E"),      # X-axis tick labels
+                                  y_axis_labels = c("30°S", "20°S", "10°S", "0°", "10°N", "20°N", "30°N", "40°N"),  # Y-axis tick labels
+                                  
+                                  legend_title,             # Legend title
+                                  legend_title_cex = 1.4,   # Legend title size
+                                  legend_title_x = -3950,   # Legend title x position
+                                  legend_title_y = 370,     # Legend title y position
+                                  legend_cex = 1.4,         # Legend size
+                                  legend_breaks,            # Legend tick positions
+                                  legend_location=c(-3700, -3400, -4100, -1650),  # Legend position
+                                  
+                                  scale_bar_position = c(-2600, -4000),  # Scale bar position
+                                  
+                                  arrow_scale = 0.45,           # North arrow size
+                                  arrow_padin = c(0.15, 0.15),  # North arrow position adjustement
+                                  
+                                  facet_letter = "",                  # Small case letter for facet
+                                  facet_letter_col = "black",         # Color of case letter for facet
+                                  facet_letter_cex = 2.2,             # Size of small case letter for facet
+                                  facet_letter_inset = c(0, -0.008))  # Position adjustment of small case letter for facet
+
+{
+  # Plot raster background without axis
+  image(x, col = color_palette,
+        xlim = xlim, ylim = ylim, axes = F,
+        xlab = xlab, ylab = ylab)
+  title(main = main_title, cex.main = main_title_cex, line = 1)
+  
+  # Generate axes with manual positioning of ticks
+  axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+  axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+
+  
+  rangeBuilder::addRasterLegend(x, locs = legend_breaks, cex.axis = legend_cex, ramp = color_palette, ncolors = 200, border = T, location = legend_location)
+  rangeBuilder::addRasterLegend(x, locs = legend_breaks, cex.axis = legend_cex, ramp = color_palette, ncolors = 200, border = T, location = legend_location)
+  graphics::text(x = legend_title_x, y = legend_title_y, font = 2, cex = legend_title_cex, label = legend_title)
+  
+  # Add facet letter
+  legend(legend = facet_letter, x = "bottomright", bty = "n", text.col = facet_letter_col,
+         text.font = 2, cex = facet_letter_cex, inset = facet_letter_inset)
+  
+  }
+}
+```
+
+```{r}
+### Plot function for tribes map, specific to add H and I rings ####
+
+{
+  tribes_map_Mollweide_HI <- function(x,                                    # Raster to map
+                                  color_palette=colors_tribe,# Color palette
+                                  main_title,                           # Main title
+                                  main_title_cex = 1.5,                 # Main title size
+                                  
+                                  xlim = c(-5457, 4953),   # Limit of plot on x-axis (Longitude)
+                                  ylim = c(-4495, 5705),    # Limit of plot on y-axis (Latitude)
+                                  axis_cex = 1.4,             # Axes size
+                                  
+                                  xlab = "",                # X-axis label
+                                  ylab = "",                # Y-axis label
+                                  x_axis_breaks = c(-3930, -2170, -420, 1500, 3050),            # X-axis tick breaks
+                                  y_axis_breaks = c(-3650, -2450, -1220, 0, 1230, 2445, 3660, 4890),        # Y-axis tick breaks
+                                  x_axis_labels = c("120°E", "100°E", "80°E", "60°E", "40°E"),      # X-axis tick labels
+                                  y_axis_labels = c("30°S", "20°S", "10°S", "0°", "10°N", "20°N", "30°N", "40°N"),  # Y-axis tick labels
+                                  
+                                  legend_title,             # Legend title
+                                  legend_title_cex = 1.4,   # Legend title size
+                                  legend_title_x = -3550,   # Legend title x position
+                                  legend_title_y = 430,     # Legend title y position
+                                  legend_cex = 1.4,         # Legend size
+                                  legend_breaks,            # Legend tick positions
+                                  legend_location=c(-4100, -3800, -3950, -1500),  # Legend position
+                                  
+                                  scale_bar_position = c(-2600, -4000),  # Scale bar position
+                                  
+                                  arrow_scale = 0.45,           # North arrow size
+                                  arrow_padin = c(0.15, 0.15),  # North arrow position adjustement
+                                  
+                                  facet_letter = "",                  # Small case letter for facet
+                                  facet_letter_col = "black",         # Color of case letter for facet
+                                  facet_letter_cex = 2.2,             # Size of small case letter for facet
+                                  facet_letter_inset = c(0, -0.008))  # Position adjustment of small case letter for facet
+
+{
+  # Plot raster background without axis
+  image(x, col = color_palette,
+        xlim = xlim, ylim = ylim, axes = F,
+        xlab = xlab, ylab = ylab)
+  title(main = main_title, cex.main = main_title_cex, line = 1)
+  
+  # Generate axes with manual positioning of ticks
+  axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+  axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+
+  
+  }
+}
+```
+
+```{r}
+
+                                  main_title_cex = 1.5
+                                  
+                                  xlim = c(-5457, 4953)
+                                  ylim = c(-4495, 5705)
+                                  axis_cex = 1.4
+                                  xlab = ""
+                                  ylab = ""
+                                  x_axis_breaks = c(-3930, -2170, -420, 1500, 3050)
+                                  y_axis_breaks = c(-3650, -2450, -1220, 0, 1230, 2445, 3660, 4890)
+                                  x_axis_labels = c("120°E", "100°E", "80°E", "60°E", "40°E")
+                                  y_axis_labels = c("30°S", "20°S", "10°S", "0°", "10°N", "20°N", "30°N", "40°N")
+                            
+                                  legend_title_cex = 1.4   # Legend title size
+                                  legend_title_x = -3550   # Legend title x position
+                                  legend_title_y = 430    # Legend title y position
+                                  legend_cex = 1.4         # Legend size
+                                  legend_location=c(-4100, -3800, -3950, -1500)  # Legend position
+                                  
+                                  scale_bar_position = c(-2600, -4000)  # Scale bar position
+                                  
+                                  arrow_scale = 0.45           # North arrow size
+                                  arrow_padin = c(0.15, 0.15)  # North arrow position adjustement
+                                  
+                                  facet_letter = ""                  # Small case letter for facet
+                                  facet_letter_col = "black"         # Color of case letter for facet
+                                  facet_letter_cex = 2.2             # Size of small case letter for facet
+                                  facet_letter_inset = c(0, -0.008)
+```
+
+
+```{r}
+### Itho vs Helico MAMERCUS, MOTHONE, MANTINEUS
+HeIt_ring_proba_stack<-readRDS("../input_data/Species_data/HeIt_ring_proba_stack.RDS")
+#ring_to_plot<-"MANTINEUS|MAMERCUS|MOTHONE"
+ring_to_plot<-"HERMIAS|MANTINEUS|MAMERCUS|MOTHONE|ORESTES|MAELUS|PAVONII|HUMBOLDT|ELZUNIA"
+map_ref<-which(str_detect(names(HeIt_ring_proba_stack), ring_to_plot))
+
+IthoVsHelico_rings_map<-HeIt_ring_proba_stack[[map_ref]]
+
+p<-progress_estimated(ncell(IthoVsHelico_rings_map[[1]]), min_time=10)
+                      
+
+
+#rings_for_stack<-c("MANTINEUS", "MAMERCUS", "MOTHONE")
+rings_for_stack<-COMIM_rings$ring_simple_ITHO
+IVSH_Both_map<-stack(
+IthoVsHelico_rings_map[[1]])
+for(i in 1:length(rings_for_stack))
+{
+ring<-rings_for_stack[i]
+stack_ref<-which(str_detect(names(IthoVsHelico_rings_map), ring))
+ if(ring=="PAVONII" | ring=="HUMBOLDT")
+  {
+    ring2<-"ELZUNIA"
+    stack_ref<-c(stack_ref, which(str_detect(names(IthoVsHelico_rings_map), ring2)))
+ }
+
+IVSH_Both_map[[i]]<- calc(IthoVsHelico_rings_map[[stack_ref]], fun=all_presence_prob)
+
+}
+names(IVSH_Both_map)<-rings_for_stack
+
+for(i in 1:nlayers(IVSH_Both_map))
+{
+  data<-IVSH_Both_map[[i]]@data@values
+  data[data==0]<-NA
+  IVSH_Both_map[[i]]@data@values<-data
+}
+
+Ith_layers<-IthoVsHelico_rings_map[[which(str_detect(names(IthoVsHelico_rings_map),"ITHO"))]]
+
+for(i in 1:nlayers(Ith_layers))
+{
+  data<-Ith_layers[[i]]@data@values
+  data[data==0]<-NA
+  Ith_layers[[i]]@data@values<-data
+}
+
+Hel_layers<-IthoVsHelico_rings_map[[which(str_detect(names(IthoVsHelico_rings_map),"HELICO"))]]
+
+for(i in 1:nlayers(Hel_layers))
+{
+  data<-Hel_layers[[i]]@data@values
+  data[data==0]<-NA
+  Hel_layers[[i]]@data@values<-data
+}
+
+```
+
+```{r}
+Red_palette<-readRDS(file="../Maps/Red_palette.rds")
+Blue_palette_pastel<-readRDS(file="../Maps/Blue_palette_pastel.rds")
+Green_palette_pastel<-readRDS(file="../Maps/Green_palette_pastel.rds")
+
+#pdf(paste0("../Maps/Comims_Both_tribe_map.pdf"), height=12, width=12)
+#pdf(paste0("../Maps/Comims_Both_tribe_map_continous.pdf"), height=12, width=12) 
+pdf(paste0("../Maps/Comims_Both_tribe_map_continous_allrings.pdf"), height=12, width=12) #not only MAMERCUS MANTINEUS and MOTHONE but all comimic rings
+for(i in 1:length(rings_for_stack))
+{
+  ring<-rings_for_stack[i]
+  ring_H<-paste0(ring, ".HELICO")
+  if(ring=="PAVONII" | ring=="HUMBOLDT")
+  {
+    ring_H<-"ELZUNIA.HELICO"
+  }
+  ring_I<-paste0(ring, ".ITHO")
+  
+
+  
+# image(IthoVsHelico_rings_map[[1]],  col="gray93", #background
+#         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+#         xlab = "", ylab = "")
+#   # Generate axes with manual positioning of ticks
+#   axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+#   axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+#   par(new=TRUE)
+
+ H_polygon<- rasterToPolygons(Hel_layers[[ring_H]])
+#to get a polygon which outline each zone
+  H_polygon = gBuffer(H_polygon,width=0.00001)
+  
+# image(Hel_layers[[ring_H]],  col="steelblue2", #Helico ring  #steelblue2 #gray63
+#         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+#         xlab = "", ylab = "")
+#   # Generate axes with manual positioning of ticks
+#   axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+#   axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0
+  
+ image(sea_shp,  col="#E1f1f1", #background
+         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+         xlab = "", ylab = "")
+# Add background, borders and graticules
+  plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+  plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+  par(new=TRUE)
+  
+colors_tribe=Blue_palette_pastel
+
+if(ring_H=="ELZUNIA.HELICO")
+{ring<-"ELZUNIA"} #change it for legend purpose
+
+tribes_map_Mollweide_HI(x = IthoVsHelico_rings_map[[ring_H]], #with continous color palette
+                      main_title = "",
+                      legend_title = paste0("Heliconiini ring Presence"),
+                      legend_title_x = -3650,
+                      legend_title_y = -1250,
+                      legend_breaks = seq(0.1, 0.9, 0.1),
+                      facet_letter = "(f)")
+  rangeBuilder::addRasterLegend(Hel_layers[[ring_H]], locs = seq(0.1, 0.9, 0.1), cex.axis = 1.4, ramp = colors_tribe, ncolors = 200, border = T, location = c(-4600, -4400, -1100, 100))
+  graphics::text(x = -4500, y = 400, font = 2, cex = 1, label = paste0("Heliconiini ",ring,"\n presence probability"))
+  
+if(ring_H=="ELZUNIA.HELICO")
+{ring<-str_replace(ring_I, ".ITHO", "")} #go back to normal
+    
+plot(H_polygon, lwd=1, border="steelblue4", add=T)
+
+  
+   scalebar(d = 2000, type = "line", lwd = 4, divs = 4, xy = c(-2600, -4000), label = c("", "2000 km", ""), adj = c(0.5, -0.8), font = 2, cex = 1.2)
+  prettymapr::addnortharrow(scale = 0.45, padin = c(0.15, 0.15), text.col = "#00000000")
+
+par(new=TRUE)
+
+  I_polygon<-rasterToPolygons(Ith_layers[[ring_I]])#to get a polygon which outline each zone
+  I_polygon = gBuffer(I_polygon,width=0.00001)
+
+# image(Ith_layers[[ring_I]],  col="darkolivegreen1", #gray83 #plum #Ithomiini #darkolivegreen1
+#         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+#         xlab = "", ylab = "")
+  
+  
+colors_tribe=Green_palette_pastel
+tribes_map_Mollweide_HI(x = Ith_layers[[ring_I]], #with color palette continous
+                      main_title = "",
+                      legend_title = paste0("Ithomiini ring presence"),
+                      legend_title_x = -3650,
+                      legend_title_y = -1250,
+                      legend_breaks = seq(0.1, 0.9, 0.1),
+                      facet_letter = "(f)")
+  rangeBuilder::addRasterLegend(Ith_layers[[ring_I]], locs = seq(0.1, 0.9, 0.1), cex.axis = 1.4, ramp = colors_tribe, ncolors = 200, border = T, location = c(-2700, -2500, -1100, 100))
+  graphics::text(x = -2600, y = 400, font = 2, cex = 1, label = paste0("Ithomiini ",ring,"\n presence probability"))
+
+plot(I_polygon, lwd=1, border="darkolivegreen4", add=T)
+
+par(new=TRUE)
+colors_tribe=Red_palette
+
+if (ring=="MANTINEUS") #no coocurrence
+{
+image(IVSH_Both_map[[ring]], #gray83 #plum #Ithomiini #darkolivegreen1
+        xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+        xlab = "", ylab = "")
+title(main =paste0("Co-occurrence and presence of Heliconiini and Ithomiini tribes for ",ring," ring") , cex.main = main_title_cex, line = 1)
+# legend(x=-5300, y=-350,cex = legend_cex, col= "steelblue2", fill="steelblue2", border="steelblue4", legend="Heliconiini ring distribution area", bty="n")
+# legend(x=-5300, y=-600,cex = legend_cex, col= "darkolivegreen1", fill="darkolivegreen1", border="darkolivegreen4", legend="Ithomiini ring distribution area", bty="n")
+  plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+  par(new=FALSE)
+  next
+}
+
+  B_polygon<-rasterToPolygons(IVSH_Both_map[[ring]])#to get a polygon which outline each zone
+  B_polygon = gBuffer(B_polygon,width=0.00001)
+
+tribes_map_Mollweide(x = IVSH_Both_map[[ring]],
+                      main_title = paste0("Co-occurrence and presence of Heliconiini and Ithomiini tribes for ",ring," ring"),
+                      legend_title = paste0("Co-occurrence probability"),
+                      legend_title_x = -3550,
+                      legend_title_y = -1450,
+                      legend_breaks = seq(0.1, 0.9, 0.1), 
+                      facet_letter = "(f)")
+plot(B_polygon, lwd=1, border="black", add=T)
+plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+
+# legend(x=-5300, y=-350,cex = legend_cex, col= "steelblue2", fill="steelblue2", border="steelblue4", legend="Heliconiini ring distribution area", bty="n")
+# legend(x=-5300, y=-600,cex = legend_cex, col= "darkolivegreen1", fill="darkolivegreen1", border="darkolivegreen4", legend="Ithomiini ring distribution area", bty="n")
+
+}
+dev.off()  
+```
+
+
+```{r}
+
+# Load mask for continent borders, plot border, and grid
+grid_Mollweide_out <- readRDS(file = "../input_data/Biogeographic_data/grid_Mollweide_out.rds")
+large_bg_mask_Mollweide <- readRDS(file = "../input_data/envData/crop_shape.RDS")
+bbox_sp_Mollweide <- readRDS(file = "../input_data/Biogeographic_data/bbox_sp_Mollweide.rds")
+sea_shp<-readRDS(file="../input_data/Biogeographic_data/sea_shp.RDS")
+
+for( m in c("ss", "sl"))
+{
+
+Full_indices_H <- readRDS(paste0("../outputs/Full_Helico_indice_stack_",m,".RDS"))
+
+for(i in 2:nlayers(Full_indices_H))
+{
+  Full_indices_H[[i]]@data@values[is.na(Full_indices_H[[1]]@data@values) & is.na(Full_indices_H[[i]]@data@values)==FALSE] <- NA
+}
+  
+Full_indices_I <- readRDS("../Ithomiini/Full_indices_I.RDS")
+
+###Binary maps with biscale
+
+names_indices <- c("sp_richness", "sp_mean_geo_rarity", "Faith_PD", "ring_richness", "ring_mean_geo_rarity", "weighted_mean_ring_size")
+# #Create dataframes for each variable
+# for (i in 1:nlayers(Full_indices_H)) {
+#   
+#   indice <- names_indices[i]
+#   indice_df <- data.frame(matrix(ncol = 2,
+#                                  nrow = length(Full_indices_H[[6]]@data@values[ is.na(Full_indices_H[[6]]@data@values) == FALSE ]) ))
+#   names(indice_df) <- c("H", "I")
+#   
+#   indice_df$H <- Full_indices_H[[i]]@data@values[ is.na(Full_indices_H[[6]]@data@values) == FALSE ]
+#   indice_df$I <- Full_indices_I[[i]]@data@values[ is.na(Full_indices_H[[6]]@data@values) == FALSE ]
+#   assign(  paste0(indice,"_DF"), indice_df )
+#   
+#   
+# }
+
+# #Create background polygon to plot
+# temp_raster <- Full_indices_H[[6]]
+# temp_raster@data@values[is.na(temp_raster@data@values)==FALSE] <- 1
+# 
+# Background_Poly <- rasterToPolygons(temp_raster)
+# 
+# #Create bivariate objects
+# sp_richness_biv <- bi_class(sp_richness_DF, x = H, y = I, style = "quantile", dim = 3)
+# 
+# #Plot
+# map <- ggplot() +
+#   geom_sf(data = Background_Poly, mapping = aes(fill = sp_richness_biv), color = "white", size = 0.1, show.legend = FALSE) +
+#   bi_scale_fill(pal = "GrPink", dim = 3)
+
+###Bivariates maps with bivariatemaps package
+
+names_indices_clean <- c("Species Richness", "Mean Species Geographic Rarity", "Faith's Phylogenetic Diversity", "Mimicry ring richness", "Mimicry ring Geographic Rarity", "Mimicry ring Mean Size")
+
+source("../functions/colmat_modified.R")
+
+
+#Number of quantiles
+nquantiles = 4
+
+for(i in 1:length(names_indices_clean))
+  {
+  names <- names_indices_clean[i]
+  
+  # Green Purple
+  # col.matrix <- colmat_modif(nquantiles=4, upperleft="#599c01", upperright="#484242", bottomleft="#f3ded9", bottomright="#a57aff", xlab=paste0("Heliconiini ", names), ylab= paste0("Ithomiini ", names), valuesx = Full_indices_H[[i]], valuesy =  Full_indices_I[[i]])
+
+  #Purle Green
+  # col.matrix <- colmat_modif(nquantiles=4, upperleft="#a57aff", upperright="#484242", bottomleft="#f3ded9", bottomright="#599c01", xlab=paste0("Heliconiini ", names), ylab= paste0("Ithomiini ", names), valuesx = Full_indices_H[[i]], valuesy =  Full_indices_I[[i]])
+  
+  #Yellow Blue, colorblind friendly
+  col.matrix <- colmat_modif(nquantiles=4, upperleft="#f3b300", upperright="#000000", bottomleft="#f3f3f3", bottomright="#509dc2", xlab=paste0("Heliconiini ", names), ylab= paste0("Ithomiini ", names), valuesx = Full_indices_H[[i]], valuesy =  Full_indices_I[[i]])
+
+  # Blue Yellow, colorblind friendly
+  # col.matrix <- colmat_modif(nquantiles=4, upperleft="#509dc2", upperright="#000000", bottomleft="#f3f3f3", bottomright="#f3b300", xlab=paste0("Heliconiini ", names), ylab= paste0("Ithomiini ", names), valuesx = Full_indices_H[[i]], valuesy =  Full_indices_I[[i]])
+  source("../functions/biv_map_modified.R")
+  bivmap <- biv_map_modified(Full_indices_H[[i]], Full_indices_I[[i]], col.matrix, nquantiles = 4)
+  #   
+  assign(paste0(names_indices[i], "_bivmap_",m), bivmap)
+  
+  #Add grey for 0x0 as last color
+  col.matrix_v <- as.vector(col.matrix)
+  col.matrix_v[ length(col.matrix) + 1] <-  "lightgrey" #"#DEE1EB"
+  
+  assign(paste0(names_indices[i], "_colmat"), col.matrix)
+  assign(paste0(names_indices[i], "_colv"), col.matrix_v)
+  
+}
+
+#Create lines for distribution borders
+
+distrib_borders <- sp_richness_bivmap_ss
+distrib_borders@data@values[distrib_borders@data@values > nquantiles^2] <- NA
+distrib_borders@data@values[distrib_borders@data@values <= nquantiles^2] <- 1
+
+distrib_borders <- boundaries(distrib_borders
+                , type='outer')
+distrib_borders@data@values[distrib_borders@data@values == 0] <- NA
+
+distrib_borders <- mask(distrib_borders, sp_richness_bivmap_ss)
+
+# # #Plot
+# par(mfrow = c(2,3))
+# for(i in 1:length(names_indices))
+# {
+#   plot(get(paste0(names_indices[i], "_bivmap")),
+#        frame.plot=F,
+#        axes=F,
+#        box=F,
+#        add=F,
+#        legend=F,
+#        col=get(paste0(names_indices[i], "_colv")))
+# }
+
+
+}
+```
+
+```{r}
+#Mollweide map, create legend for each map
+names_indices_clean_lg <- c("Species\n Richness", "Mean Species\n Geographic Rarity", "Faith's Phylogenetic\n Diversity", "Mimicry ring\n Richness", "Mimicry ring\n Geographic Rarity", " Mimicry ring\n Mean Size")
+
+source("../functions/add_bivar_legend.R")
+
+for(m in c("ss", "sl"))
+{
+  Full_indices_H <-  readRDS(paste0("../outputs/Full_Helico_indice_stack_",m,".RDS"))
+
+for(l in 1:6)
+{
+name_code <- names_indices[l]
+col.matrix =   get(paste0(name_code, "_colmat"))
+
+scale_decimals <- 1 #General case, not possible to have more numbers so for big number, no decimals
+
+if(max(Full_indices_H[[l]]@data@values, na.rm= TRUE) > 9.99)
+{
+ scale_decimals <- 0 
+}
+
+add_bivar_legend(rasterx = Full_indices_H[[l]],
+                 rastery = Full_indices_I[[l]],
+                 color.matrix = col.matrix,
+                 nquantiles = 4,
+                 xlab = substitute(paste(bold("Heliconiini"))),
+                 ylab = substitute(paste(bold("Ithomiini"))),
+                 pngname = paste0("../Maps/Map_legends/",name_code,"_Bivmap_legend_",m,".png" ),
+                 scaledeci = scale_decimals)
+}                 
+}
+```
+
+
+```{r}
+#Mollweide map, final plot
+
+source("../functions/custom_Bivariates_maps_mollweide.R")
+
+for(m in c("ss", "sl"))
+{
+
+pdf(paste0("../Maps/BivarMap_",m,".pdf"), height = 8, width = 12)
+par(mar = c(3.1, 3.1, 2.7, 1.6))
+par(mfrow = c(2, 3))
+
+for (l in 1:6)
+{
+name_code <- names_indices[l]
+name_clean <- names_indices_clean[l]
+name_clean_lg <- names_indices_clean_lg[l]
+
+map <- get(paste0(name_code, "_bivmap_",m))
+palette_bv <- unique(get(paste0(name_code, "_colv")))
+  
+ image(sea_shp,  col="#E1f1f1", #background
+         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+         xlab = "", ylab = "")
+# Add background, borders and graticules
+  plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+  plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+  par(new=TRUE)
+
+Bivar_map_Mollweide(x = map, color_palette = palette_bv, main_title = name_clean, legend_title = name_clean_lg, facet_letter = paste0("(",letters[l],")") )
+  plot(distrib_borders, col = "red", add = T, legend = F)
+plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+par(new=TRUE)
+
+legend_biv <- readPNG(source = paste0("../Maps/Map_legends/",name_code,"_Bivmap_legend_",m,".png"))
+
+par(new = TRUE)
+rasterImage(legend_biv, xleft = -5500, ybottom = -4400, xright = -1000, ytop = 100)
+
+
+}
+dev.off()
+}
+```
+
+```{r}
+#Phylogeny figure
+#Load phylogeny
+
+
+tree_obj <- scan(file = "../phylogeny/Espeland_et_al_Dated_tree_Magallon_2015_root_calibration.tre", what = "character")
+
+conf_intervals <- str_extract_all(tree_obj, "95%..............")[[3]]
+
+#find the interval to store it as node value
+for(i in 1:length(conf_intervals))
+{
+
+conf_intervals[i] <- (as.numeric(str_extract_all(conf_intervals[i], ".[.]...")[[1]][2]) - as.numeric(str_extract_all(conf_intervals[i], ".[.]...")[[1]][1]))/2 
+
+}
+
+conf_intervals <- as.character(as.numeric (conf_intervals)*100)
+
+for(i in 1:length(conf_intervals))
+{
+conf_nb <- conf_intervals[i] 
+
+
+tree_obj[[3]] <- str_replace(tree_obj[[3]], pattern= "..95%..............."  , replace = conf_nb)
+    
+}
+
+Phylo_Lepido <- read.tree(text = tree_obj[[3]])
+
+Phylo_Lepido <- Preorder(Phylo_Lepido)
+
+
+
+Nymph_node <- getMRCA(Phylo_Lepido, c("LEP22823_Satyrini_Maniola_jurtina", "LEP25280_Libytheinae_NS_Libythea_lepida" )) #Nymphalidae
+
+
+Phylo_Nympha <- extract.clade(Phylo_Lepido, node = Nymph_node)
+
+Species_Lepido <- as.data.frame(str_split_fixed(Phylo_Nympha$tip.label, "_", n= 4))
+names(Species_Lepido) <- c("code", "subfam", "tribe", "sp")
+
+
+for(i in 1:nrow(Species_Lepido))
+{
+  if(str_detect(Species_Lepido$tribe[i], "ini") == FALSE)
+  {
+    Species_Lepido$tribe[i] <- Species_Lepido$subfam[i]
+  }
+    
+}
+
+Species_Lepido$keep <- TRUE
+
+for(i in 2:nrow(Species_Lepido))
+{
+  if(str_detect(Species_Lepido$tribe[i], Species_Lepido$tribe[i-1]))
+  {
+    Species_Lepido$keep[i] <- FALSE
+  }
+}
+
+
+#Manual corrections
+wrong_tribe <- c("Corades", "Elymniini2", "Limenitidini", "AcraeiniQ", "Thyridia", "Danaus")
+wrong_sp <- c("undulata")
+Species_Lepido$keep[Species_Lepido$tribe %in% wrong_tribe] <- FALSE
+Species_Lepido$keep[Species_Lepido$sp %in% wrong_sp] <- FALSE
+
+Phylo_Nympha <- drop.tip(Phylo_Nympha, Phylo_Nympha$tip.label[!Species_Lepido$keep])
+
+Species_Lepido$tribe[Species_Lepido$tribe=="Heliconini"] <- "Heliconiini"
+
+
+
+#Subfamily names
+v_Sat <- c("Satyrini", "Elymniini", "Haeterini", "Amathusiini", "Melanitini", "Dirini", "Brassolini", "Morphini")
+v_Cha <- c("Charaxini", "Pallaini", "Prothoini", "Anaeomorphini", "Preponini", "Anaeini")
+v_Nym <- c("Victoriini", "Junoniini", "Melitaeini", "Kallimiini", "Nymphalini", "Coeini")
+v_Bib <- c("Callicorini", "Epiphiliini", "Epicaliini", "Ageroniini", "Biblidini", "Eubagini")
+# v_Hel <- c("Argynnini", "Vagrantini", "Acraeini")
+v_Lim <- c("Parthenini", "Limenitidiini", "Neptini", "Adoliadini")
+# v_Dan <- c("Danaini", "Tellervini")
+
+#Some manual name corrections
+Species_Lepido$tribe[Species_Lepido$tribe == "Epicalliini"] <- "Epicaliini"
+Species_Lepido$tribe[Species_Lepido$tribe == "Anaemorphini"] <- "Anaeomorphini"
+
+
+Species_Lepido$add_subfam <- NA
+
+vec_subf <-c("v_Sat", "v_Cha", "v_Nym", "v_Bib", "v_Lim")
+vec_subfname <-c("Satyrinae", "Charaxinae", "Nymphalinae", "Biblidinae", "Limenitidinae")
+
+for(i in 1:nrow(Species_Lepido))
+{
+  for(j in 1:length(vec_subf))
+  {
+  if(Species_Lepido$tribe[i] %in% get(vec_subf[j]))
+  {
+    Species_Lepido$add_subfam[i] <- vec_subfname[j]
+  }
+  }
+}
+
+Species_Lepido$add_subfam[Species_Lepido$keep == TRUE & is.na(Species_Lepido$add_subfam)==TRUE ] <- Species_Lepido$tribe[Species_Lepido$keep == TRUE & is.na(Species_Lepido$add_subfam)==TRUE ]
+
+Species_Lepido <- Species_Lepido[Species_Lepido$keep==TRUE,]
+
+for(i in 2:nrow(Species_Lepido))
+{
+  if(str_detect(Species_Lepido$add_subfam[i], Species_Lepido$add_subfam[i-1]))
+  {
+    Species_Lepido$keep[i] <- FALSE
+  }
+}
+
+Phylo_Nympha <- drop.tip(Phylo_Nympha, Phylo_Nympha$tip.label[!Species_Lepido$keep])
+
+Phylo_Nympha$tip.label <- Species_Lepido$add_subfam[Species_Lepido$keep == TRUE]
+
+#Rotate both Ithomiini and Heliconiini nodes
+rotate_nodes <- c( nodepath(Phylo_Nympha, from = Mrca_HI, to = which(Phylo_Nympha$tip.label == "Heliconiini")),
+                   nodepath(Phylo_Nympha, from = Mrca_HI, to = which(Phylo_Nympha$tip.label == "Ithomiini")))
+
+rotate_nodes <- unique(rotate_nodes)
+rotate_nodes <- rotate_nodes[ !rotate_nodes %in% c(Mrca_HI, 29, 30) & rotate_nodes > Ntip(Phylo_Nympha) ]
+
+Phylo_Nympha <- rotateNodes(Phylo_Nympha, rotate_nodes)
+
+
+
+Mrca_HI <- getMRCA(Phylo_Nympha, c("Heliconiini", "Ithomiini"))
+Node_Helico <- tail(nodepath(Phylo_Nympha, from = Mrca_HI, to = which(Phylo_Nympha$tip.label == "Heliconiini")), 2)[1]
+Node_Itho <- tail(nodepath(Phylo_Nympha, from = Mrca_HI, to = which(Phylo_Nympha$tip.label == "Ithomiini")), 2)[1] 
+
+node_colors <- rep(NA, Nnode(Phylo_Nympha))
+node_colors[Mrca_HI - Ntip(Phylo_Nympha)] <- "red"
+node_colors[Node_Helico - Ntip(Phylo_Nympha)] <- "#509dc2"
+node_colors[Node_Itho - Ntip(Phylo_Nympha)] <- "#f3b300"
+node_shape <- ifelse(is.na(node_colors), NA, 21)
+
+tip.colors <- rep("black", Ntip(Phylo_Nympha))
+tip.colors[which(Phylo_Nympha$tip.label == "Ithomiini")] <- "#f3b300"
+tip.colors[which(Phylo_Nympha$tip.label == "Heliconiini")] <- "#509dc2"
+
+Phylo_Nympha$edge.length <- Phylo_Nympha$edge.length*100
+
+Mrca_HI_age <- RRphylo::distNodes(Phylo_Nympha, c("Heliconiini", Mrca_HI))[,2]
+Mrca_Nymph_age <- RRphylo::distNodes(Phylo_Nympha, c("Heliconiini", Phylo_Nympha$edge[1,1]))[,2]
+Hel_age <- RRphylo::distNodes(Phylo_Nympha, c("Heliconiini", Node_Helico))[,2]
+Itho_age <- RRphylo::distNodes(Phylo_Nympha, c("Ithomiini", Node_Itho))[,2]
+
+edge.colors <- rep("black", length(Phylo_Nympha$edge[,1]))
+edge.colors[which(Phylo_Nympha$edge[,2] == which(Phylo_Nympha$tip.label == "Ithomiini"))] <- "#f3b300"
+edge.colors[which(Phylo_Nympha$edge[,2] == which(Phylo_Nympha$tip.label == "Heliconiini"))] <- "#509dc2"
+
+conf_interv_Node <- as.numeric(Phylo_Nympha$node.label[Mrca_HI - Ntip(Phylo_Nympha)])
+conf_interv_H <- as.numeric(Phylo_Nympha$node.label[Node_Helico - Ntip(Phylo_Nympha)])
+conf_interv_I <- as.numeric(Phylo_Nympha$node.label[Node_Itho - Ntip(Phylo_Nympha)])
+
+
+```
+```{r}
+#pdf output
+
+pdf("../phylogeny/plot_phylo_tribe.pdf", height = 4.5, width = 10)
+
+plot.phylo(Phylo_Nympha, tip.color = tip.colors, edge.color = edge.colors);
+axisPhylo();
+nodelabels(pch = node_shape, bg=node_colors, cex=1.5);
+abline(v = Mrca_Nymph_age - Mrca_HI_age, col = "red", lwd = 2, lty = 2)
+abline(v = Mrca_Nymph_age - Hel_age, col = "#509dc2", lwd = 2, lty = 2)
+abline(v = Mrca_Nymph_age - Itho_age, col = "#f3b300", lwd = 2, lty = 2)
+
+par(new=TRUE)
+par(mar =c(5.1, 4.1, 3.1, 2.1))
+plot.new()
+text(paste0("Divergence time = ",
+            round(Mrca_HI_age, 1),
+            " (± ",
+            conf_interv_Node,
+            ") My"
+            ),
+     x = 0.198,#Mrca_Nymph_age - Mrca_HI_age+27,
+     y = 1,#18,
+     col = "red"  )
+
+text(paste0("Age = ", round(Hel_age, 1), " (± ", conf_interv_H,") My"),
+     x = 0.528,#Mrca_Nymph_age - Mrca_HI_age+27,
+     y = 1,#18,
+     col = "#509dc2",
+     cex =0.7)
+
+text(paste0("Age = ", round(Itho_age, 1), " (± ", conf_interv_I,") My"),
+     x = 0.49,#Mrca_Nymph_age - Mrca_HI_age+27,
+     y = 0.955,#18,
+     col = "#f3b300",
+     cex =0.7)
+
+dev.off()
+
+```
+

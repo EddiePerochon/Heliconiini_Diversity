@@ -1,0 +1,380 @@
+---
+title: "16_Merging_OMU"
+author: "Eddie Pérochon"
+date: "10/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 16 : Merging OMU #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Create maps at OMU level by computing "probability" of presence of any of the ssp of the OMU
+# Generate a continuous map for each 4 option between Jaccard/TSS and Buffer.80/95
+
+ 
+### Inputs 
+   # Stack of continuous EM and binary maps for each ssp, per species from script 11
+###
+
+### Outputs
+   # OMU continuous map for each 4 option between Jaccard/TSS and Buffer.80/95
+   # Summary of composition of OMU stack: with/without rasterized ss, only rasterized ssp
+###
+
+
+
+```{r}
+### Prepare stuff
+
+# Effacer l'environnement
+rm(list = ls())
+
+library(raster)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(stringr)
+```
+
+```{r}
+# Load environmental stack to use as reference for extent and CRS and generate a mask for continental borders
+envData <- readRDS(file = paste0("../input_data/envData/Envstack.rds"))
+continent_mask <- readRDS(file = paste0("../input_data/envData/continent_mask.RDS"))
+
+# Load Summary table for OMU/unit and for Species
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping.RData"))
+
+list_occ$Mimicry_ring<-toupper(list_occ$Mimicry_ring) #in caps
+list_occ$Sp_ID[list_occ$Sp_ID=="Agraulis_sp.nov"]<-"Agraulis_spnov"
+list_occ$Sp_ID<-str_replace_all(list_occ$Sp_ID, "_", ".")
+
+#Load updated classification
+classif <- read_excel("../input_data/update_2024/Heliconiini_mimicry_classification.xlsx")[,1:7]
+
+classif$Super_groups[is.na(classif$Super_groups)] <- paste0(classif$New_Phenotypic_group[is.na(classif$Super_groups)], "_largo")
+classif$Taxon_name <- str_replace_all(classif$Taxon_name, " ", "_")
+saveRDS(classif, "../input_data/update_2024/newclassif.RDS")
+
+##Manual update for the 5 ssp that are not in the classification
+man_updt <- classif[0,]
+man_updt <- rbind(man_updt, c(ID_taxa= nrow(classif)+1, Genus = "Agraulis", Species = "Agraulis sp.nov", Taxon_name = "Agraulis_spnov", Old_Mimetic_group = "AGRAULIS", New_Phenotypic_group = "VANILLAE", Super_groups = "VANILLAE_largo"))
+man_updt <- rbind(man_updt,c(ID_taxa= nrow(classif)+2 , Genus = "Dione", Species = "Dione juno" , Taxon_name = "Dione_juno_suffumata", Old_Mimetic_group ="AGRAULIS", New_Phenotypic_group = "VANILLAE", Super_groups = "VANILLAE_largo"))
+man_updt <- rbind(man_updt,c(ID_taxa= nrow(classif)+3, Genus = "Dione" , Species = "Dione moneta" , Taxon_name = "Dione_moneta_moneta", Old_Mimetic_group ="AGRAULIS", New_Phenotypic_group = "VANILLAE" , Super_groups = "VANILLAE_largo"))
+man_updt <- rbind(man_updt,c(ID_taxa= nrow(classif)+4, Genus = "Heliconius" , Species = "Heliconius demeter", Taxon_name = "Heliconius_demeter_subspnov", Old_Mimetic_group = "DENNIS-RAY", New_Phenotypic_group = "THELXIOPE" , Super_groups = "RICINI_largo"))
+man_updt <- rbind(man_updt,c(ID_taxa= nrow(classif)+5, Genus = "Podotricha" , Species = "Podotricha judith", Taxon_name = "Podotricha_judith_straminea", Old_Mimetic_group = "JUDITH", New_Phenotypic_group = "DERCYLLIDAS", Super_groups = "DERCYLLIDAS_largo" ))
+
+names(man_updt) <- names(classif)
+
+classif <- rbind(classif, man_updt)
+
+list_occ$new_code <- str_replace_all(list_occ$biomodTag, "[.]", "_")
+
+list_occ$MR_ss <- classif$New_Phenotypic_group[match(list_occ$new_code, classif$Taxon_name)]
+list_occ$MR_sl <- classif$Super_groups[match(list_occ$new_code, classif$Taxon_name)]
+
+list_occ = list_occ %>%
+  unite(OMU, c(Sp_ID, Mimicry_ring), remove=F, sep=".") #merge sp_id & mimicry ring for OMU list
+
+list_occ = list_occ %>%
+  unite(OMU_ss, c(Sp_ID, MR_ss), remove=F, sep=".") #merge sp_id & mimicry ring for OMU list
+
+list_occ = list_occ %>%
+  unite(OMU_sl, c(Sp_ID, MR_sl), remove=F, sep=".") #merge sp_id & mimicry ring for OMU list
+
+save(list_occ, file="../input_data/occurences_df/list_occ_after_clipping_rs.RData")
+saveRDS(list_occ, file="../input_data/occurences_df/list_occ_after_clipping_rs.RDS")
+
+list_occ_OMU_ss <- list_occ %>% 
+  group_by(OMU_ss) %>% 
+  summarise(MR_ss = first(MR_ss))
+
+table(list_occ_OMU_ss$MR_ss)
+table(list_occ$MR_ss)
+
+list_occ_OMU_sl <- list_occ %>% 
+  group_by(OMU_sl) %>% 
+  summarise(MR_sl = first(MR_sl))
+
+table(list_occ_OMU_sl$MR_sl)
+table(list_occ$MR_sl)
+
+list_occ <- list_occ[!is.na(list_occ$MR_ss),]
+
+# Make a list of modeled and non-modeled units (occ.unit = with only occurrences points)
+modeled_unit <- list_occ[!is.na(list_occ$Model_ID), ]
+rasterized_unit <- list_occ[is.na(list_occ$Model_ID), ]
+
+# Function to compute probability of presence with multiple OMUs
+aggreg_prob = function(x, na.rm) { 
+  y <- 1-prod(1-x) # Probability of presence of OMU = probability of presence of at least one ssp of the OMU = opposite of probability of absence of all ssp of OMU
+  return(y) # Output
+}
+
+list_occ$one.Binaries <- F # To record which species include at least one binaries maps
+list_occ$all.Binaries <- F # To record which species include only binaries maps
+```
+
+```{r}
+### Loop by species
+  for(m in c("ss", "sl"))
+  {
+
+p<-progress_estimated(nrow(list_occ), min_time=10)
+
+for (i in 1:nrow(list_occ)) 
+{
+  # i <- 23
+  p$pause(0.1)$tick()$print()
+  # Load a random layer to initiate the stacks (to remove later)
+  sp.stack_Jaccard.80 <- sp.stack_Jaccard.95 <- sp.stack_TSS.80 <- sp.stack_TSS.95 <- stack(continent_mask) 
+  
+  
+
+  
+  # Load OMU name
+  OMU <- as.character(list_occ[,paste0("OMU_",m)][i]) 
+  
+  # Create directory to store outputs per species
+  if(!dir.exists(paste0("../outputs/By_OMU/",OMU))) { # Test if the folder exists already or not
+    dir.create(paste0("../outputs/By_OMU/",OMU), recursive = T) # Create folder if absent
+  }
+  
+  # Create directory to store maps per species
+  if(!dir.exists(paste0("../Maps/By_OMU/",OMU))) { # Test if the folder exists already or not
+    dir.create(paste0("../Maps/By_OMU/",OMU), recursive = T) # Create folder if absent
+  }
+  
+  OMU_list <- modeled_unit[modeled_unit[,paste0("OMU_",m)] == OMU, ]
+  if (nrow(OMU_list) > 0) {      # If at least one OMU was modeled
+    
+    for (j in 1:nrow(OMU_list))  # For each OMU
+    { 
+      unit <- as.character(OMU_list$biomodTag[j]) # Load the unit name                  
+      
+      # Jaccard.80: Load the continuous maps and stack them all
+      Ensemble_Jaccard_median_cropped_80 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_Jaccard_median_cropped_80.rds"))
+      sp.stack_Jaccard.80 <- addLayer(sp.stack_Jaccard.80, Ensemble_Jaccard_median_cropped_80)
+
+      # Jaccard.95: Load the continuous maps and stack them all
+      Ensemble_Jaccard_median_cropped_95 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_Jaccard_median_cropped_95.rds"))
+      sp.stack_Jaccard.95 <- addLayer(sp.stack_Jaccard.95, Ensemble_Jaccard_median_cropped_95)
+      
+      # TSS.80: Load the continuous maps and stack them all
+      Ensemble_TSS_median_cropped_80 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_TSS_median_cropped_80.rds")) 
+      sp.stack_TSS.80 <- addLayer(sp.stack_TSS.80, Ensemble_TSS_median_cropped_80)   
+      
+      # TSS.95: Load the continuous maps and stack them all
+      Ensemble_TSS_median_cropped_95 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_TSS_median_cropped_95.rds")) 
+      sp.stack_TSS.95 <- addLayer(sp.stack_TSS.95, Ensemble_TSS_median_cropped_95)
+    }
+  }
+  
+  Binaries <- rasterized_unit[rasterized_unit[,paste0("OMU_",m)] == OMU,]
+  
+  if (nrow(Binaries) > 0) {  # If at least one ssp was rasterized
+    
+    list_occ$one.Binaries[list_occ[,paste0("OMU_",m)] == OMU] <- T
+    
+    for (j in 1:nrow(Binaries)) {  # For each  ssp
+      
+      unit <-  as.character(Binaries$biomodTag[j]) # Load the unit name 
+      
+      # Create directory to store outputs per ssp
+      if(!dir.exists(paste0("../outputs/By_unit/",unit))) { # Test if the folder exists already or not
+        dir.create(paste0("../outputs/By_unit/",unit), recursive = T) # Create folder if absent
+      }
+      
+      # Create directory to store maps per ssp
+      if(!dir.exists(paste0("../Maps/By_unit/",unit))) { # Test if the folder exists already or not
+        dir.create(paste0("../Maps/By_unit/",unit), recursive = T) # Create folder if absent
+      }
+      
+      # # Load the rasterized occurrence map
+      # Raster_Occ <- readRDS(file = paste0("../input_data/Species_data/",res,"/Binary_Rasters_from_Occurrences/",unit,".rds"))
+      # 
+      # # Add the continental borders as 0 values for empty pixels (oceans are NA)
+      # rasterized_map <- continent_mask
+      # rasterized_map[!is.na(Raster_Occ[])] <- 1
+      # 
+      # save(rasterized_map, file = paste0("../outputs/By_OMU/",unit,"/rasterized_map_",unit,".RData"), version = "2")
+      # saveRDS(rasterized_map, file = paste0("../outputs/By_OMU/",unit,"/rasterized_map_",unit,".rds"), version = "2")
+      # 
+      # pdf(file = paste0("../maps/By_OMU/",unit,"/rasterized_map_",unit,".pdf"), height = 6, width = 7)
+      # plot(rasterized_map, main = unit)
+      # dev.off()
+      # # Copy in sp folder
+      # file.copy(from = paste0("../maps/By_OMU/",unit,"/rasterized_map_",unit,".pdf"), to = paste0("../maps/By_OMU/",sp,"/rasterized_map_",unit,".pdf"), overwrite = T)
+      
+      # Load the rasterized map, with continental borders
+      load(file = paste0("../outputs/By_unit/",unit,"/raster_stack_cropped.RData"))
+      rasterized_map <-Select_raster_stack_cropped
+      # Jaccard.80: Load the binary maps and stack them all
+      sp.stack_Jaccard.80 <- addLayer(sp.stack_Jaccard.80, rasterized_map)
+
+      # Jaccard.95: Load the binary maps and stack them all
+      sp.stack_Jaccard.95 <- addLayer(sp.stack_Jaccard.95, rasterized_map)
+      
+      # TSS.80: Load the binary maps and stack them all
+      sp.stack_TSS.80 <- addLayer(sp.stack_TSS.80, rasterized_map)   
+      
+      # TSS.95: Load the binary maps and stack them all
+      sp.stack_TSS.95 <- addLayer(sp.stack_TSS.95, rasterized_map)
+      
+    }
+  }
+  
+  # Note case with only rasterized OMU
+  if ((nrow(Binaries) > 0) & (nrow(OMU_list) == 0)) {
+    list_occ$all.Binaries[list_occ[,paste0("OMU_",m)] == OMU] <- T
+  }
+  
+  # Drop the useless first layer used to initiate the stack
+  sp.stack_Jaccard.80 <- dropLayer(sp.stack_Jaccard.80, i = 1)
+  sp.stack_Jaccard.95 <- dropLayer(sp.stack_Jaccard.95, i = 1)
+  sp.stack_TSS.80 <- dropLayer(sp.stack_TSS.80, i = 1)
+  sp.stack_TSS.95 <- dropLayer(sp.stack_TSS.95, i = 1)
+  
+  # Compute probability map per Species
+  
+  sp.cont_Jaccard.80 <- calc(sp.stack_Jaccard.80, fun = aggreg_prob)
+  sp.cont_Jaccard.95 <- calc(sp.stack_Jaccard.95, fun = aggreg_prob)
+  sp.cont_TSS.80 <- calc(sp.stack_TSS.80, fun = aggreg_prob)
+  sp.cont_TSS.95 <- calc(sp.stack_TSS.95, fun = aggreg_prob)
+  
+  plot(sp.cont_TSS.95)
+  
+   
+      # Create directory to store maps per ssp
+      
+  if(!dir.exists(paste0("../Maps/By_OMU/",OMU))) { # Test if the folder exists already or not
+        dir.create(paste0("../Maps/By_OMU/",OMU), recursive = T) # Create folder if absent
+      }
+  
+  if(!dir.exists(paste0("../outputs/By_OMU/",OMU))) { # Test if the folder exists already or not
+        dir.create(paste0("../outputs/By_OMU/",OMU), recursive = T) # Create folder if absent
+      }
+  
+  save(sp.cont_Jaccard.80, file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.80_",OMU,".RData"), version = "2")
+  saveRDS(sp.cont_Jaccard.80, file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.80_",OMU,".rds"), version = "2")
+  save(sp.cont_Jaccard.95, file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.95_",OMU,".RData"), version = "2")
+  saveRDS(sp.cont_Jaccard.95, file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.95_",OMU,".rds"), version = "2")
+  save(sp.cont_TSS.80, file = paste0("../outputs/By_OMU/",OMU,"/cont_TSS.80_",OMU,".RData"), version = "2")
+  saveRDS(sp.cont_TSS.80, file = paste0("../outputs/By_OMU/",OMU,"/cont_TSS.80_",OMU,".rds"), version = "2")
+  save(sp.cont_TSS.95, file = paste0("../outputs/By_OMU/",OMU,"/cont_TSS.95_",OMU,".RData"), version = "2")
+  saveRDS(sp.cont_TSS.95, file = paste0("../outputs/By_OMU/",OMU,"/cont_TSS.95_",OMU,".rds"), version = "2")
+  
+  pdf(file = paste0("../maps/By_OMU/",OMU,"/cont_Jaccard.80_",OMU,".pdf"), height = 6, width = 7)
+  plot(sp.cont_Jaccard.80, main = OMU)
+  dev.off()
+
+  pdf(file = paste0("../maps/By_OMU/",OMU,"/cont_Jaccard.95_",OMU,".pdf"), height = 6, width = 7)
+  plot(sp.cont_Jaccard.95, main = OMU)
+  dev.off()
+  
+  pdf(file = paste0("../maps/By_OMU/",OMU,"/cont_TSS.80_",OMU,".pdf"), height = 6, width = 7)
+  plot(sp.cont_TSS.80, main = OMU)
+  dev.off()
+  
+  pdf(file = paste0("../maps/By_OMU/",OMU,"/cont_TSS.95_",OMU,".pdf"), height = 6, width = 7)
+  plot(sp.cont_TSS.95, main = OMU)
+  dev.off()
+
+  
+}
+
+# save(list.sp, file = paste0(internal.wd,"/list.sp.RData"))
+
+sum(list_occ$one.Binaries) #  species among the  have at least one binary map used
+sum(list_occ$all.Binaries) #  species among the  are just modeled under binary maps
+
+
+##### Generate stack of all OMUs outputs for all options
+
+
+# Load a random layer to initiate the stacks (to remove later)
+
+All_unit_stack_Jaccard.80 <- All_unit_stack_Jaccard.95 <- All_unit_stack_TSS.80 <- All_unit_stack_TSS.95 <- stack(continent_mask)
+
+### Loop by ssp
+for (i in 1:nrow(list_occ)) 
+{
+  # i <- 23
+  
+  # Load ssp name
+  unit <- as.character(list_occ$biomodTag[i]) 
+  
+  if (list_occ$initial_model_type[i] != "rasterized") # For modeled OMUs
+  { 
+    # Jaccard.80: Load the continuous maps and stack them all
+    Ensemble_Jaccard_median_cropped_80 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_Jaccard_median_cropped_80.rds"))
+    All_unit_stack_Jaccard.80 <- addLayer(All_unit_stack_Jaccard.80, Ensemble_Jaccard_median_cropped_80)
+    
+    # Jaccard.95: Load the continuous maps and stack them all
+    Ensemble_Jaccard_median_cropped_95 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_Jaccard_median_cropped_95.rds"))
+    All_unit_stack_Jaccard.95 <- addLayer(All_unit_stack_Jaccard.95, Ensemble_Jaccard_median_cropped_95)
+    
+    # TSS.80: Load the continuous maps and stack them all
+    Ensemble_TSS_median_cropped_80 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_TSS_median_cropped_80.rds")) 
+    All_unit_stack_TSS.80 <- addLayer(All_unit_stack_TSS.80, Ensemble_TSS_median_cropped_80)   
+    
+    # TSS.95: Load the continuous maps and stack them all
+    Ensemble_TSS_median_cropped_95 <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Ensemble_TSS_median_cropped_95.rds")) 
+    All_unit_stack_TSS.95 <- addLayer(All_unit_stack_TSS.95, Ensemble_TSS_median_cropped_95)
+  
+  } else  # For rasterized OMU
+  { 
+    # Load the unique rasterized binary map for this OMU
+    load(file = paste0("../outputs/By_unit/",unit,"/raster_stack_cropped.RData"))
+    rasterized_map <- Select_raster_stack_cropped
+    # Jaccard.80: Load the binary maps and stack them all
+    All_unit_stack_Jaccard.80 <- addLayer(All_unit_stack_Jaccard.80, rasterized_map)
+    
+    # Jaccard.95: Load the binary maps and stack them all
+    All_unit_stack_Jaccard.95 <- addLayer(All_unit_stack_Jaccard.95, rasterized_map)
+    
+    # TSS.80: Load the binary maps and stack them all
+    All_unit_stack_TSS.80 <- addLayer(All_unit_stack_TSS.80, rasterized_map)   
+    
+    # TSS.95: Load the binary maps and stack them all
+    All_unit_stack_TSS.95 <- addLayer(All_unit_stack_TSS.95, rasterized_map)
+  }
+  
+  if (i %% 10 == 0)
+  {print(i)}
+  
+}
+
+# Drop the useless first layer used to initiate the stack
+All_unit_stack_Jaccard.80 <- dropLayer(All_unit_stack_Jaccard.80, i = 1)
+All_unit_stack_Jaccard.95 <- dropLayer(All_unit_stack_Jaccard.95, i = 1)
+All_unit_stack_TSS.80 <- dropLayer(All_unit_stack_TSS.80, i = 1)
+All_unit_stack_TSS.95 <- dropLayer(All_unit_stack_TSS.95, i = 1)
+
+# Rename layers with OMU names
+names(All_unit_stack_Jaccard.80) <- names(All_unit_stack_Jaccard.95) <- names(All_unit_stack_TSS.80) <- names(All_unit_stack_TSS.95) <- as.character(list_occ$biomodTag)
+
+plot(All_unit_stack_Jaccard.80)
+
+save(All_unit_stack_Jaccard.80, file = paste0("../outputs/Indices_stacks/All_unit_stack_Jaccard.80_",m,".RData"), version = "2")
+saveRDS(All_unit_stack_Jaccard.80, file = paste0("../outputs/Indices_stacks/All_unit_stack_Jaccard.80_",m,".rds"), version = "2")
+save(All_unit_stack_Jaccard.95, file = paste0("../outputs/Indices_stacks/All_unit_stack_Jaccard.95_",m,".RData"), version = "2")
+saveRDS(All_unit_stack_Jaccard.95, file = paste0("../outputs/Indices_stacks/All_unit_stack_Jaccard.95_",m,".rds"), version = "2")
+save(All_unit_stack_TSS.80, file = paste0("../outputs/Indices_stacks/All_unit_stack_TSS.80_",m,".RData"), version = "2")
+saveRDS(All_unit_stack_TSS.80, file = paste0("../outputs/Indices_stacks/All_unit_stack_TSS.80_",m,".rds"), version = "2")
+save(All_unit_stack_TSS.95, file = paste0("../outputs/Indices_stacks/All_unit_stack_TSS.95_",m,".RData"), version = "2")
+saveRDS(All_unit_stack_TSS.95, file = paste0("../outputs/Indices_stacks/All_unit_stack_TSS.95_",m,".rds"), version = "2") 
+
+}
+```
+

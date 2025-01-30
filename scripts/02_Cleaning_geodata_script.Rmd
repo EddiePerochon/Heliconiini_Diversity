@@ -1,0 +1,141 @@
+---
+title: "02_Cleaning_geographical_datas"
+author: Eddie Pérochon
+output: html_document
+---
+
+##### Script 02: Cleaning occurrence data (geographical outliers)#####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+  # Removing occurrences geographical outliers using coordinate_cleaner package
+###
+
+
+### Inputs
+  # Merged occurrence dataset
+###
+
+### Outputs
+  # Occurrence dataset without outliers
+###
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(rgbif)
+library(sp)
+library(countrycode)
+library(CoordinateCleaner)
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(raster)
+library(tidyr)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(stringr)
+library(readxl)
+library(xlsx)
+
+```
+
+```{r}
+rm(list = ls())
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+```
+
+```{r}
+Helico_DB<-read.csv("../input_data/occurences_df/finalDB.csv", sep=";", header=T)
+```
+
+
+```{r}
+
+Helico_DB$Lat[Helico_DB$Lat==-3044545.000]<-(-3.044545)
+Helico_DB$Lon[Helico_DB$Lon==-57633740.000]<-(-57.633740)
+flags <- clean_coordinates(x = Helico_DB,
+                           lon = "Lon", lat = "Lat",
+                           #countries = "countryCode",
+                           species = "fullname",# List of tests to run
+                           tests = c("capitals",      # Coordinates found in capitals
+                                     "centroids",     # Coordinates found at centroids of countries
+                                     #"duplicates",    # Check for duplicates (identical coordinates) within species
+                                     "equal",         # Check for coordinates with latitude = longitude
+                                     "gbif",          # Check if the coordinates is within a 1km radius around the GBIF headquarter
+                                     "zeros",         # Test for coordinates with null latitude or longitude
+                                     #"countries",     # Test if occurrences are found within a list of countries or a custom SpatialPolygon
+                                     "institutions",  # Test if occurrences are found around known institution locations
+                                     "seas",          # Test if fall in the ocean
+                                     "urban tests"#,   # Test if fall within urban areas
+                                     #"outliers"
+                                     ),     # Test for minimum/mean distance to other occurrences per species
+                                                         # outliers_td = 1000 km as minimum by default
+                                                         # outliers_mtp = 5. Multiplier for the IRQ of mean distance to flag as outlier
+                           seas_ref = buffland)
+flags$.otl_quant<-CoordinateCleaner::cc_outl(flags, lon="Lon", lat="Lat", species = "fullname", method='quantile', value="flagged", min_occs = 10)
+flags$.otl_dist<-cc_outl(flags, lon="Lon", lat="Lat", species = "fullname", method='distance', value="flagged", min_occs = 10)
+flags$.otl_mad<-cc_outl(flags, lon="Lon", lat="Lat", species = "fullname", method='mad', value="flagged", min_occs = 10)
+```
+
+```{r}
+fct_plot_flag<-function(x)
+{
+plot(x$Lon[x[,i]==FALSE], x$Lat[x[,i]==FALSE], xlab="Longitude", ylab="Latitude", xlim=c(-180,180), ylim=c(-90,90)
+     , pch = 16, cex = 0.8, col="red")
+bigmap<- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(bigmap, add = TRUE)
+}
+
+```
+
+```{r}
+
+vecname<-colnames(flags[,13:length(flags)])
+setwd("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/flagmap")
+
+for (i in 13:length(flags)) 
+  {
+  filen<-paste("plotflag10MIN",vecname[i-12],".png", sep="")
+  png(filename = filen, width=1228, height = 606, )
+  fct_plot_flag(flags)
+  dev.off()
+  }
+
+```
+
+
+```{r}
+
+plot(x = flags$Lon[flags[,22]==FALSE], y = flags$Lat[flags[,22]==FALSE], xlab="Longitude", ylab="Latitude", xlim=c(-180,180), ylim=c(-90,90)
+     , pch = 16, cex = 0.2, col="red")
+bigmap<- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(bigmap, add = TRUE)
+
+```
+```{r}
+####Outlier cleaning
+Helico_FinalDB<- flags[flags$Is_Heliconiini==TRUE & flags$Lon<(-25) & flags$Lon>(-145) & flags$.sea==TRUE & flags$.otl_dist==TRUE,]
+
+Helico_FinalDB<-Helico_FinalDB[str_detect(Helico_FinalDB$Locality, "sectar")==FALSE,] #virer les insectaries
+
+```
+
+```{r}
+plot(x = Helico_FinalDB$Lon, y = Helico_FinalDB$Lat, xlab="Longitude", ylab="Latitude", #xlim=c(-180,180), ylim=c(-90,90)
+     , pch = 16, cex = 0.2, col="red")
+bigmap<- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(bigmap, add = TRUE)
+```
+
+```{r}
+write.csv(Helico_FinalDB, "../input_data/occurences_df/Helico_FinalDB.csv")
+```
+

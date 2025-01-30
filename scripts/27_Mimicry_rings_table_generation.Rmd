@@ -1,0 +1,106 @@
+---
+title: "27_Mimicry_rings_tables_generation"
+author: "Eddie Pérochon"
+date: "2022-07-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 27: Pages with picures of each mimicry rings#####
+
+/!\ Pictures not accessible in the supplementaries  /!\
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Create pages to illustrate Heliconiini mimicry rings
+ 
+### Inputs
+# Pictures of each taxa, from Chris Jiggin, Blanca Huertas, butterfliesofamerica.com
+
+###
+
+### Outputs
+#Pages with pictures of each mimicry rings
+
+###
+
+
+```{r}
+rm(list=ls())
+##Charge useful objects
+#Ssp table with OMUs
+picture_correspondance<-readxl::read_excel("Excels d'info/Mimicry-rings.xlsx", 
+    sheet = "Mimicry_ring_pictures")
+picture_correspondance$Colonne5[picture_correspondance$Colonne5=="Red band"]<-"Redband"
+
+#List Mimicry rings
+mimicry_rings_list<-unique(picture_correspondance$Colonne5)
+
+```
+
+```{r}
+#plot jpg function
+plot_jpeg = function(path, add=FALSE)
+{
+  require('jpeg')
+  jpg = readJPEG(path, native=T) # read the file
+  res = dim(jpg)[2:1] # get the resolution, [x, y]
+  if (!add) # initialize an empty plot area if add==FALSE
+    plot(1,1,xlim=c(1,res[1]),ylim=c(1,res[2]),asp=1,type='n',xaxs='i',yaxs='i',xaxt='n',yaxt='n',xlab='',ylab='',bty='n')
+  rasterImage(jpg,1,1,res[1],res[2])
+}
+```
+
+```{r}
+#Creating each table of pictures
+
+for(i in 1:length(mimicry_rings_list))
+{
+  ring<-mimicry_rings_list[i]
+  list_ssp_ring<-picture_correspondance$Pic[picture_correspondance$Colonne5==ring]
+  list_names_ring<-picture_correspondance$fullname[picture_correspondance$Colonne5==ring]
+
+pdf(paste0("../Photo Heliconiini/Example for each mimicry ring/Planches/",ring,".pdf"), height = 20, width = 8)
+
+internal_margins <- par()$mar
+par(mar = c(1.5, 1.5, 1.5, 1.5))
+par(mfrow= c(10, 4))
+
+
+if(is.na(match(ring, c("Chestertonii", "Heurippa", "Cretacea")))==FALSE) #cases with 1 ssp in the ring, not in the same folder
+{
+  main<-list_names_ring
+  ssp<-list_ssp_ring
+    plot_jpeg(paste0("../Photo Heliconiini/Mimicry_ring_mur/",ssp))
+    title(main, line = -11, cex.main=0.8)
+    dev.off() 
+    print(paste0("Done for ",ring," ",i,"/",length(mimicry_rings_list)))
+    next
+}
+
+  for (j in 1:length(list_ssp_ring))
+  {
+    ssp <- list_ssp_ring[j]
+    main <- list_names_ring[j]
+    plot_jpeg(paste0("../Photo Heliconiini/Mimicry_ring_mur/", ring, "/", ssp))
+    title(main, line = -11, cex.main = 0.8)
+  }
+
+par(mar = internal_margins)
+par(mfrow = c(1, 1))
+
+dev.off()
+print(paste0("Done for ",ring," ",i,"/",length(mimicry_rings_list)))
+  
+}
+```
+

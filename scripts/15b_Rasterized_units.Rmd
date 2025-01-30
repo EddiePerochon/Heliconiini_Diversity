@@ -1,0 +1,358 @@
+---
+title: "15b_Rasterized_units"
+author: "Eddie Pérochon"
+date: "07/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 15b : Add info of subsp with few occurrences#####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# rasterized units with a few number of occurences
+# Application of a Alpha Hull
+
+ 
+### Inputs 
+  #occurences of each non modeled units
+  #envstack to rasterize
+###
+
+### Outputs
+  #raster for each non modeled units with alpha hull buffer
+###
+
+
+  
+```{r}
+# Effacer l'environnement
+rm(list = ls())
+
+# Load libraries
+library(raster)
+library(rgeos)
+library(rgdal)
+library(alphahull)
+library(geosphere)
+library(spatialEco)
+library(rnaturalearth)
+library(dplyr)
+library(rnaturalearthdata)
+library(rnaturalearthhires)
+library(sp)
+library(sf)
+
+```
+
+```{r}
+
+# Load Summary table for unit rasterized
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping.RData"))
+rasterized_unit <- list_occ[list_occ$initial_model_type=="rasterized", ]
+
+load(file = "../input_data/envData/continent_mask.RData")
+
+
+# Load environmental stack to use as reference for extent and CRS
+envData <- readRDS(file = paste0("../input_data/envData/Envstack.rds"))
+
+
+source("../functions/Alpha_functions.R", local = TRUE) 
+```
+
+
+
+```{r}
+############## Modif between scripts ######################
+
+index_model_to_compute <- c(1:nrow(rasterized_unit))
+# index_model_to_compute <- c(1:200)
+# index_model_to_compute <- c(201:400)
+# index_model_to_compute <- c(401:563)
+###########################################################
+
+### Loop for all unit
+
+
+# Units en erreur à utiliser avec un alpha-shape plutôt que alpha-hull
+#c()
+
+### Loop for all modeled OMU/unit
+p<-progress_estimated(nrow(rasterized_unit), min_time=10)
+for (i in index_model_to_compute) 
+{
+  
+  p$pause(0.1)$tick()$print()
+  unit <- as.character(rasterized_unit$biomodTag[i])
+  unit2 <- as.character(rasterized_unit$code_unit[i]) #before biomod2 the tag was different
+  sp <- as.character(rasterized_unit$Sp_ID[i])
+  # Create directory to store stacks by unit
+  if(!dir.exists(paste0("../outputs/By_unit/",unit))) { # Test if the folder exists already or not
+    dir.create(paste0("../outputs/By_unit/",unit), recursive = T) # Create folder if absent
+  }
+  
+  # Create directory to store stacks by species
+  if(!dir.exists(paste0("../outputs/By_Species/",sp))) { # Test if the folder exists already or not
+    dir.create(paste0("../outputs/By_Species/",sp), recursive = T) # Create folder if absent
+  }  
+  
+ # Create directory to store stacks by unit
+  if(!dir.exists(paste0("../Maps/By_unit/",unit))) { # Test if the folder exists already or not
+    dir.create(paste0("../Maps/By_unit/",unit), recursive = T) # Create folder if absent
+  }
+  
+  # Create directory to store stacks by species
+  if(!dir.exists(paste0("../Maps/By_Species/",sp))) { # Test if the folder exists already or not
+    dir.create(paste0("../Maps/By_Species/",sp), recursive = T) # Create folder if absent
+  }    
+  
+  cat(paste0("\n", Sys.time()," ------ Starts for ", unit, " = Unit N°",i,"/",nrow(rasterized_unit)," ------\n"))
+  
+  ### Load unit occurrence points
+  load(paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_", unit2,".RData")) # Load Spatial object with occurrences
+  unit_points<-unit_points2
+  
+ 
+  unit_points2<- SpatialPointsDataFrame(unit_points2[, c("x","y")], 
+                                                    unit_points2,
+                                                    proj4string= CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+  
+  unit_points<- spTransform( SpatialPointsDataFrame(unit_points[, c("x","y")], 
+                                                    unit_points,
+                                                    proj4string= CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")),
+                             CRS= CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")) #need to get unit_points back to WGS for dist calc
+  
+rasterized_unit_points<-rasterize(x=unit_points2, y=envData, field=1)
+  
+  
+  ### 1/ Compute the buffer distance as the 80% or 95% quantile the distance to the closest occurrence points among occurrence points for each OMU ####
+
+  # To be seen as an estimation of the uncertainty surrounding the completeness of our survey.
+  # Well surveyed unit should have short distances between occurrences, and no isolated points. Thus the distribution map can be clipped tighly around points
+  # Unsufficiently surveyed OMU will display isolated points, thus the buffer must be wide to encompass the uncertainty around the distribution limits of this OMU
+  # Use 95% quantile instead of maximum distance to avoid single isolated point to drive the size of the buffer. Allow 5% of outliers
+#  if(length(unit_points)>2){
+#   Coord_unit <- unit_points@coords
+# 
+#   Occ.dist = geosphere::distm(x = Coord_unit)/1000 # Geometric distance on WGS84 ellipsoid, in km
+# 
+#   # Remove diagonal (distance to thmeselves = 0 km)
+#   diag(Occ.dist) <- NA
+#   # Compute distance to closest other occurrence point
+#   Occ.dist_min <- apply(X = Occ.dist, MARGIN = 2, FUN = min, na.rm = T)
+# 
+#   # Get the 80% and 95% quantile and max.distance
+#   Uncertainty.80 <- round(quantile(x = Occ.dist_min, probs = 0.8),1)
+#   Uncertainty.80half<-Uncertainty.80/2
+#   Uncertainty.95 <- round(quantile(x = Occ.dist_min, probs = 0.95),1)
+#   Uncertainty.95half<-Uncertainty.95/2
+#   Max.dist <- round(max(Occ.dist_min),1)
+# 
+#   # Save in list_occ
+#   list_occ$Uncertainty.80[list_occ$biomodTag == unit] <- Uncertainty.80
+#   list_occ$Uncertainty.95[list_occ$biomodTag == unit] <- Uncertainty.95
+#   list_occ$Uncertainty.95H[list_occ$biomodTag == unit] <- Uncertainty.95half
+#   list_occ$Uncertainty.80H[list_occ$biomodTag == unit] <- Uncertainty.80half
+#   list_occ$Max.dist[list_occ$biomodTag == unit] <- Max.dist
+# 
+# 
+#   ### 2/ Generate alpha-hull buffer ####
+# 
+#   # Temporary projection of the spatial object of occurrences in Moll
+#   proj.points <-  unit_points2
+# 
+#   tryCatch(
+#    {
+#      Hull <- ahull_to_SPLDF(ahull(proj.points@coords, alpha = 500)) # Try an alpha-hull first
+#    },
+#    error = function(e) # If fails, do an alpha shape instead
+#      {
+#        cat(paste0("Alpha-hull failed for ", unit, ", use alpha-shape instead \n"))
+#        cat("ERROR :",conditionMessage(e), "\n")   # Display the error message but do not stop the function
+#        Hull <- ashape_to_SPLDF(ashape(proj.points@coords, alpha = 500))
+#      })
+# 
+#   plot(Hull)
+# 
+#   # Hull <- ahull(proj.points@coords, alpha = 1000000) # alpha diameter = 1000km
+#   # Hull <- ahull_to_SPLDF(x = Hull)
+# 
+#   # For cases that cannot handle alpha-hull, use alpha-shape
+#   # Hull <- ashape(proj.points@coords, alpha = 1000000)
+#   # Hull <- ashape_to_SPLDF(x = Hull)
+# 
+#   # Save crs of the newly created alpha-hull
+#   Hull@proj4string <- proj.points@proj4string
+# 
+#   # Extend the shape with a buffer based on the quality of presence sampling (Uncertainty.80)
+#   # As a minimum, use the same buffer distance used to draw PsA = 120 km
+#   Buffer_80 <- gBuffer(spgeom = Hull, width = max(60, Uncertainty.80))
+#   Buffer_95 <- gBuffer(spgeom = Hull, width = max(60, Uncertainty.95))
+#   Buffer_95H <- gBuffer(spgeom = Hull, width = max(60, Uncertainty.95half))
+#   Buffer_80H <- gBuffer(spgeom = Hull, width = max(60, Uncertainty.80half))
+# 
+#   # Remove holes
+#   Buffer_80_unholed <- spatialEco::remove.holes(Buffer_80)
+#   Buffer_95_unholed <- spatialEco::remove.holes(Buffer_95)
+#   Buffer_80H_unholed <- spatialEco::remove.holes(Buffer_80H)
+#   Buffer_95H_unholed <- spatialEco::remove.holes(Buffer_95H)
+# 
+#   # Retransposition in Moll
+#   Buffer_80.Moll <- spTransform(Buffer_80_unholed, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+#   Buffer_95.Moll <- spTransform(Buffer_95_unholed, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+#   Buffer_80H.Moll <- spTransform(Buffer_80H_unholed, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+#   Buffer_95H.Moll <- spTransform(Buffer_95H_unholed, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+# # plot(rasterized_unit_points)
+# #   points(unit_points2, col = "red", cex = 1, pch = 16)
+# #    plot(Buffer_80.Moll, border = "dodgerblue", lwd = 2, col = NA, add =T)
+# #    plot(Buffer_95.Moll, lwd = 2, add =T)
+# 
+#   # Rasterization
+#   Buffer_80.rasterized <- rasterize(x = Buffer_80.Moll, y = envData, field = 1)
+#   Buffer_95.rasterized <- rasterize(x = Buffer_95.Moll, y = envData, field = 1)
+#   Buffer_80H.rasterized <- rasterize(x = Buffer_80H.Moll, y = envData, field = 1)
+#   Buffer_95H.rasterized <- rasterize(x = Buffer_95H.Moll, y = envData, field = 1)
+#   # plot(Buffer_80.rasterized, add = T)
+#   # plot(Buffer_95.rasterized, add = T)
+# 
+# 
+#     # Save final buffers
+#   save(Buffer_80.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_80.RData"), version = "2")
+#   saveRDS(Buffer_80.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_80.rds"), version = "2")
+#   save(Buffer_95.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_95.RData"), version = "2")
+#   saveRDS(Buffer_95.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_95.rds"), version = "2")
+#  save(Buffer_80H.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_80H.RData"), version = "2")
+#   saveRDS(Buffer_80H.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_80H.rds"), version = "2")
+#   save(Buffer_95H.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_95H.RData"), version = "2")
+#   saveRDS(Buffer_95H.rasterized, file = paste0("../outputs/By_unit/",unit,"/Buffer_95H.rds"), version = "2")
+#   
+#   ### 3/ Clip the raster ####
+#   
+#   
+#   # Load buffers
+#   Buffer_80.rasterized <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Buffer_80.rds"))
+#   Buffer_95.rasterized <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Buffer_95.rds"))
+#   Buffer_80H.rasterized <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Buffer_80H.rds"))
+#   Buffer_95H.rasterized <- readRDS(file = paste0("../outputs/By_unit/",unit,"/Buffer_95H.rds"))
+#   
+#   ## 3.1.1/ EM maps
+# envData@data@values[is.na(envData@data@values)!=TRUE]<-1
+# full1_map<-envData[[1]]
+#   # Apply buffers
+#   rasterized_unit_points_cropped_80 <- mask(full1_map, Buffer_80.rasterized)
+#   
+#   rasterized_unit_points_cropped_95 <- mask(full1_map, Buffer_95.rasterized)
+#   
+#    rasterized_unit_points_cropped_80H <- mask(full1_map, Buffer_80H.rasterized)
+#   
+#   rasterized_unit_points_cropped_95H <- mask(full1_map, Buffer_95H.rasterized)
+# 
+#   # Make a full stack for all Eval metric and buffers
+#   rasterized_stack_cropped_by_buffers <- stack(rasterized_unit_points_cropped_80, rasterized_unit_points_cropped_95, rasterized_unit_points_cropped_80H, rasterized_unit_points_cropped_95H)
+# 
+#   # Create names for the layers
+#   Crop <- rep("cropped", 4)
+#   Buffer <- c("80","95", "80H", "95H")
+# 
+#   layer_names_df <- data.frame(Crop = Crop, Buffer = Buffer, stringsAsFactors = F)
+#   layer_names <- apply(X = layer_names_df, MARGIN = 1 , FUN = paste, collapse = "_")
+# 
+#   names(rasterized_stack_cropped_by_buffers) <- layer_names
+#   
+# 
+# 
+#   
+#   ### Add 0 value for terrestrial pixels to be able to distinguish from oceans
+#   Select_raster_stack_cropped<- merge(x = continent_mask, y = rasterized_stack_cropped_by_buffers)
+#   
+#   save(Select_raster_stack_cropped, file=paste0("../outputs/By_unit/",unit,"/raster_stack_cropped.RData"))
+#  
+# 
+#   ### 4/ Plot the final cropped ####
+# 
+#   # Function adding the points to the plot on each layer
+#   add_points <- function() {
+#     plot(unit_points2, add = TRUE, col = "red", pch = 16, cex = 0.3)
+#   }
+# 
+#   # 4.1/ Plot the 4 EM for 1 Eval metric and 1 Buffer, on a single pdf page
+# 
+# 
+#     pdf(file = paste0("../Maps/By_unit/",unit,"/plot_raster_",unit,".pdf"), height = 6, width = 7)
+#     plot(Select_raster_stack_cropped, addfun = add_points)
+#     title(main = unit, outer = T)
+#     dev.off()
+#     # Copy in species folder
+#     # sp <- as.character(rasterized_unit$Sp_full[i])
+#     file.copy(from = paste0("../Maps/By_unit/",unit,"/plot_raster",unit,".pdf"), to = paste0("../Maps/By_species/",sp,"/plot_raster_",unit,".pdf"), overwrite = T)
+#   }
+#   else {
+     ### Add 0 value for terrestrial pixels to be able to distinguish from oceans
+  Select_raster_stack_cropped<- merge(x = rasterized_unit_points, y = continent_mask)
+ 
+save(Select_raster_stack_cropped, file=paste0("../outputs/By_unit/",unit,"/raster_stack_cropped.RData"))
+  ### 4/ Plot the final cropped ####
+
+  # Function adding the points to the plot on each layer
+  add_points <- function() {
+    plot(unit_points2, add = TRUE, col = "red", pch = 16, cex = 0.3)
+  }
+
+  # 4.1/ Plot the 4 EM for 1 Eval metric and 1 Buffer, on a single pdf page
+
+
+    pdf(file = paste0("../Maps/By_unit/",unit,"/plot_raster_",unit,".pdf"), height = 6, width = 7)
+    plot(Select_raster_stack_cropped, addfun = add_points)
+    title(main = unit, outer = T)
+    dev.off()
+    # Copy in species folder
+    # sp <- as.character(rasterized_unit$Sp_full[i])
+    file.copy(from = paste0("../Maps/By_unit/",unit,"/plot_raster",unit,".pdf"), to = paste0("../Maps/By_species/",sp,"/plot_raster_",unit,".pdf"), overwrite = T)
+
+}
+#}
+
+
+
+# Save Summary table for unit models
+save(list_occ, file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"), version = "2")
+saveRDS(list_occ, file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.rds"), version = "2")
+
+
+# plot(list_occ$Uncertainty.80 ~ list_occ$Uncertainty.95)
+# 
+# hist(list_occ$Uncertainty.80)
+# hist(list_occ$Uncertainty.95)
+
+```
+
+```{r}
+pdf(file="../outputs/full_pdf_raster_after_clipping.pdf", height = 9, width = 7)
+
+p<-progress_estimated(nrow(rasterized_unit), min_time=10)
+  
+for(i in 1:nrow(rasterized_unit))
+{
+  p$pause(0.1)$tick()$print()
+  unit<-rasterized_unit$biomodTag[i]
+  unit2<-rasterized_unit$code_unit[i]
+
+  load(file = paste0("../outputs/By_unit/",unit,"/raster_stack_cropped.RData"))
+  
+  load(paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_",unit2,".RData"))
+  
+  plot(Select_raster_stack_cropped, main=paste0(unit))
+  points(x= unit_points2$x, y= unit_points2$y, pch = 16, cex = 0.3, col = "red")
+}
+dev.off
+```

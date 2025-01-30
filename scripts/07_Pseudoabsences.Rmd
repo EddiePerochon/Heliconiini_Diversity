@@ -1,0 +1,514 @@
+---
+title: "07_Pseudoabsence"
+output: html_document
+---
+
+##### Script 07: Generates pseudoabsences #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Generates sets of pseudoabsences (PsA) (3 for restricted modelling, 9 for full modelling) for each ssp.
+# Nb of sets based on model type, based on number of occurrences available
+# Pseudo-absences drawn randomly from other samples sites, with a weighting-distance scheme, and a minimum buffer around occurrences
+
+### Inputs =
+
+#Occurrence data rasterized for each subspecies
+#Environmental stack of selected variables
+
+###
+
+### Outputs
+  
+  # Matrix of distances among sample sites
+  # Table of sampling site coordinates
+  # Spatial objects with occurrences and PsA coordinates
+  # PsA table for each ssp to use in biomod2
+  # PDF plot of probability distribution of selected PsA for each set, for each ssp
+  # PDF map of PsA set for each ssp
+
+
+###
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+###clean envi + packages
+rm(list = ls())
+
+library(ade4)
+library(dplyr)
+library(sf)
+library(raster)
+library(rgl)
+library(FactoMineR)
+library(factoextra)
+library(stringr)
+library(tidyr)
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(ggplot2)
+
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+
+```
+
+```{r}
+#Load files
+load("../input_data/occurences_df/Occ_used_for_SDM.RData") #DF
+load(file = "../input_data/occurences_df/list_occ_vec.RData") #vec for each ssp
+load(file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")# DF for each ssp
+load(file = "../input_data/useful_vectors/list_species.RData")#vec for each sp
+load(file = "../input_data/useful_vectors/list_mimicry.RData")#vec for each MR
+load(file = "../input_data/useful_vectors/list.tag.outliers_env.RData")#vec for each env outlier
+
+load(file = "../input_data/envData/Envstack.RData") #stack of envi var
+
+if(length(list_occ$Sp_ID)==0){
+list_occ<-base::merge(list_occ, Occ_used_for_SDM[,c("Tag", "Sp_ID")], by.x="code_unit", by.y="Tag", all.y=FALSE, no.dups=TRUE)
+list_occ<-unique(list_occ)
+} #add Sp_ID column only if it does not already exists
+save(list_occ ,file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+```
+
+```{r}
+#add env data for each var in the DF
+
+
+
+for(i in 1 : nrow(Occ_used_for_SDM)){
+  for( j in 1 : length(names(Var_stack_final))){
+    
+    Occ_used_for_SDM[i, paste0(names(Var_stack_final)[j]) ] <- Var_stack_final[[j]]@data@values[ cellFromXY( Var_stack_final, c(Occ_used_for_SDM$x[i],Occ_used_for_SDM$y[i])) ]
+    
+  }
+  
+}
+  
+
+```
+
+
+```{r}
+###extract each min and max valor
+MinMaxEnv<-data.frame(bio1=numeric(), bio2=numeric(), bio12=numeric(), bio15=numeric(), elev=numeric(), forest=numeric())
+begin<-which( colnames(Occ_used_for_SDM)=="bio1" )
+  
+  for(j in begin : ncol(Occ_used_for_SDM))
+    {
+    MinMaxEnv[1,j-begin+1]<-min(Occ_used_for_SDM[j], na.rm=T)
+    MinMaxEnv[2,j-begin+1]<-max(Occ_used_for_SDM[j], na.rm=T)
+    }
+row.names(MinMaxEnv)<-c("min", "max")
+```
+
+```{r}
+###Looking for environnemental data with no occurences (<minvar & >maxvar)
+ Var_stack_OUT<-Var_stack_final
+
+for (i in 1:length(names(Var_stack_final))){
+  minVar<-( Var_stack_OUT[[i]] < MinMaxEnv[1,i]) #min
+  maxVar<-( Var_stack_OUT[[i]] > MinMaxEnv[2,i]) #max
+  Var_stack_OUT[[i]]<-(minVar+maxVar)
+  names(Var_stack_OUT)<-names(Var_stack_final)
+}
+ 
+names(Var_stack_OUT)<-names(Var_stack_final)
+
+jpeg(file="../input_data/envData/EnvData_with_no_occurences.jpeg", quality = 300)
+plot(Var_stack_OUT)
+title(main = "Environnemental data with no occurences and their location",  line = -12.5)
+dev.off() #plot to save it
+
+#not much env data not covered with occurence so no need to use it for pseudoabs draw
+```
+
+
+
+```{r}
+occ.coords <- Occ_used_for_SDM[, c("x","y")] 
+
+
+# Rasterization of occurrences
+raster.occ_full <- rasterize(x = occ.coords, # Occurrence coordinates
+                             y = Var_stack_final, # Env stack grid to apply
+                             field = 1, # Value to store in the raster
+                             fun = function(x, ...) mean(x)) # Apply mean to keep value = 1 in case of multiple occurrences in one pixel
+
+
+raster.occ_full<-projectRaster(from=raster.occ_full, crs = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0")) #projection in WGS to use distances mesures because Moll does not deal good with distances
+
+mydf <- structure(list(longitude = c(Occ_used_for_SDM$x), latitude = c(Occ_used_for_SDM$y)), .Names = c("x", 
+"y"), class = "data.frame", row.names = c(NA, -(nrow(Occ_used_for_SDM)))) #coordsfor sptransform
+
+Occ_WGS<-spTransform( 
+  SpatialPointsDataFrame(data = Occ_used_for_SDM, 
+                         coords = mydf, 
+                         proj4string = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")),
+          CRSobj = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0")) #transform df into WGS
+
+occ.coords<- as.data.frame(Occ_used_for_SDM[,c("LonWGS", "LatWGS")])
+#change the coords vector with the right CRS
+names(occ.coords)<-c("x","y")
+
+cell_indices <- vector(mode = "integer", length = nrow(occ.coords))
+for (i in 1:nrow(occ.coords)) {
+  cell_indices[i] <- cellFromXY(raster.occ_full, occ.coords[i,]) #get cell indices for each occurence
+}
+
+# Use ID from 1 to last instead of cell indices
+sampling_ID <- as.factor(as.numeric(as.factor(cell_indices)))
+# 4168 sampling sites
+```
+
+
+
+```{r}
+
+# Get coordinates of pixels associated with each occurrence
+xy <- foreach (i = seq_along(cell_indices), .combine = rbind) %do% {
+  xyFromCell(raster.occ_full, cell_indices[i])
+}
+  
+raster_infos <- as.tibble(cbind(cell_indices, sampling_ID, xy))
+raster_info_to_integer <-raster_infos %>%
+  rename(LatWGS=y,
+         LonWGS=x,
+         cell_indicesWGS=cell_indices,
+         sampling_ID_WGS=sampling_ID
+         )
+
+# Store infos on occurrences on raster grid in df of occurrences
+
+if (length(dplyr::intersect(names(Occ_used_for_SDM), names(raster_info_to_integer))) > 0) {
+ Occ_used_for_SDM <- Occ_used_for_SDM%>% 
+    dplyr::select(-names(raster_info_to_integer))
+}
+Occ_used_for_SDM <- Occ_used_for_SDM %>%
+  bind_cols(raster_info_to_integer)
+
+  save(Occ_used_for_SDM, file = "../input_data/occurences_df/Occ_used_for_SDM.RData")
+  saveRDS(Occ_used_for_SDM, file = "../input_data/occurences_df/Occ_used_for_SDM.RDS")
+
+
+### Generate table of sampling sites coordinates
+sampling.sites_coords_with_index_and_cell_nb <- raster_infos %>% 
+  unique() %>% 
+  arrange(sampling_ID)
+
+
+save(sampling.sites_coords_with_index_and_cell_nb, file = "../input_data/Sampling_sites/sampling.sites_coords_with_index_and_cell_nb.RData")
+
+sampling.sites_coords <- sampling.sites_coords_with_index_and_cell_nb %>% 
+  dplyr::select(x, y)
+
+save(sampling.sites_coords, file = "../input_data/Sampling_sites/sampling.sites_coords.RData")
+
+
+### Compute distance matrix of all sampling sites
+Sampling.sites.Dist = geosphere::distm(x = sampling.sites_coords)/900 # Geometric distance on WGS84 ellipsoid, in km
+
+save(Sampling.sites.Dist, file = "../input_data/Sampling_sites/Sampling.sites.Dist.RData")
+```
+
+```{r}
+##### 2/ Get a record of sampling sites that do not have associated env. data to discard them from the potential PsA pool ####
+
+load(file = "../input_data/Sampling_sites/sampling.sites_coords.RData")
+envMW<-readRDS(file="../input_data/envData/Envstack.rds")
+
+
+EnvWGS<-projectRaster(from=Var_stack_final, crs = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"))
+sampling.sites_coords$env_data<-NA
+
+    SSCMW<-sampling.sites_coords #get data 
+    SSCMW$id<-1:nrow(SSCMW) #to keep row order
+    SSCMW2<-merge(SSCMW, unique(Occ_used_for_SDM[,c("LonWGS","LatWGS","x","y")]), by.x=c("x","y"), by.y=c("LonWGS", "LatWGS")) #merge with original moll coords
+    row.names(SSCMW2)<-SSCMW2$id
+    SSCMW2<-SSCMW2[order(SSCMW2$id),] #original order
+    SSCMW2=SSCMW2%>%
+      rename (xWGS=x, yWGS=y, x=x.y, y=y.y)
+    
+for (i in 1:nrow(sampling.sites_coords)) {
+  
+  # Extract env values for each sampling sites
+  test <- raster::extract(EnvWGS, sampling.sites_coords[i, 1:2])
+  
+  # If any env values is missing, note to not use this sampling site as potential PsA site
+  sampling.sites_coords$env_data[i] <- all(!is.na(test))
+}
+    #########Get the same info for MW projection
+    SSCMW2$env_data<-NA
+for (i in 1:nrow(SSCMW2)) {
+  
+  # Extract env values for each sampling sites
+  test <- raster::extract(envMW, SSCMW2[i, c("x","y")])
+  
+  # If any env values is missing, note to not use this sampling site as potential PsA site
+  SSCMW2$env_data[i] <- all(!is.na(test))
+} 
+
+    ####add the WGS without envi to the list
+for (i in 1:nrow(sampling.sites_coords)) {
+  if(sampling.sites_coords$env_data[i]!=SSCMW2$env_data[i]){
+    sampling.sites_coords$env_data[i]<-SSCMW2$env_data[i]
+  }
+  
+}    
+    
+
+sum(!sampling.sites_coords$env_data) # 24 sampling sites out of 4168 are not available to draw PsA because they lack env data
+
+save(sampling.sites_coords, file = "../input_data/Sampling_sites/sampling.sites_coords.RData")
+save(EnvWGS, file= "../input_data/envData/Var_stack_WGS84.RData")
+saveRDS(EnvWGS, file= "../input_data/envData/Var_stack_WGS84.RDS")
+
+```
+
+```{r}
+##### 3/ Generate PA tables: Parallelized version #####
+
+# Changes =
+
+# Add library loading in the loop
+# Modify lines that assign value in object outside of the loop : list.models
+#    N.obs et dérivés
+# Generate a return(list()) for these objects that are not saved at each iteration, typically infos you want to store in a vector/list/table for each iteration
+# Add script to geenrate and close the cluster
+# foreach ... %dopar%
+
+
+# Remove environment
+#rm(list = ls())
+
+### 3.1/ Set up the cluster ####
+
+#library(foreach)
+#library(doParallel)
+
+# Detect the number of threads
+#numCores <- detectCores()
+# registerDoParallel(numCores)  # To set the nb if threads to use when using %dopar%
+
+#cl <- makeCluster(numCores) # Generate the virtual cluster from the number of threads
+#registerDoParallel(cl)      # To set the virtual cluster when using %dopar%
+
+# getDoParWorkers() # Pour vérifier le nombre de coeurs enregistrés
+
+### 3.2/ Load stuff useful for all units (outside the loop) ####
+
+### Load table to track model outputs
+load(file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+load("../input_data/occurences_df/list_occ_vec.RData")
+load("../input_data/useful_vectors/list_species.RData")
+
+### Load occurrence dataset
+  load(file = "../input_data/occurences_df/Occ_used_for_SDM.RData")
+
+# Load environmental stack
+envData <- readRDS(file = "../input_data/envData/Var_stack_WGS84.RDS")
+envMW<-readRDS(file="../input_data/envData/Envstack.rds")
+
+### Load sampling sites infos for PsA Generation
+load(file = "../input_data/Sampling_sites/Sampling.sites.Dist.RData")
+load(file = "../input_data/Sampling_sites/sampling.sites_coords.RData")
+
+source("../functions/progcombine.R")
+
+# Set seed to ensure repetability of random PsA draws
+set.seed(277461)
+
+
+### 3.3/ Loop to generate PsA table for each units/OMU ####
+for(k in seq_along(list_occ_vec))
+  {
+#temp <- foreach (k = seq_along(list_occ_vec), .combine = progcombine_rbind(nreps = length(list_occ_vec)), .init = NULL) %dopar% {
+# temp <- foreach (k = 1:5) %dopar% {
+  # k <- 1
+  
+  unit <- as.character(list_occ_vec[k])
+  ModeleType <- list_occ$initial_model_type[k]
+  N.obs<-list_occ$N.obs_envOtl[k]
+  
+  ##### 3.3.1/ PsA generation ####
+  
+  ### Only for OMU/unit that will be modeled, to save time
+  
+  if (ModeleType =="rasterized") { 
+    
+    # Warning message for OMU with too low sample size to try a SDM
+    cat(paste0(Sys.time(), " - No Pseudo-Absences Generation for ", unit, " = Unit N°",k,"\n"))
+    
+  } else { # PsA Generation for OMU with at least 6 obs.
+    
+    cat("\n", as.character(Sys.time()), "----- PsA generation starts for", unit, "= Unit N°",k,"\n")
+    
+    # Load occurrences coordiantes and spatial object
+    unit.occurrence <- Occ_used_for_SDM[Occ_used_for_SDM$Tag == unit, c("LonWGS","LatWGS")]
+    load(file = paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_", unit,".RData"))
+    
+     unit_points<- spTransform( 
+  SpatialPointsDataFrame(data = unit_points2, 
+                         coords = unit_points2[, c("x", "y")], 
+                         proj4string = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")),
+          CRSobj = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"))
+    
+    
+    # Get species name for output paths
+    sp <- list_occ$Sp_ID[k]
+    
+    # Retrieve sampling sites ID for this OMU
+    unit_sampling_ID <- unique(Occ_used_for_SDM[Occ_used_for_SDM$Tag == unit, "sampling_ID_WGS"])
+    
+    # Extract the minimal distance of sampling sites, to any of the occurrence points of this OMU
+    if (length(unit_points) == 1) { # Case with a simple occurrence point
+      Closest.dist <- Sampling.sites.Dist[unit_sampling_ID,] 
+    } else { # Case with multiple occurrence points
+      Closest.dist <- apply(X = Sampling.sites.Dist[unit_sampling_ID,], MARGIN = 2, FUN = min)
+    }
+    
+    # Select only sampling points outside the buffer zone to draw potential PsA
+    # Also discard PsA that do not have env data associated with (because of small errors in GPS coordiantes for points lying close to coastlines)
+    buffer <- 120 # Buffer = 4 cells
+    index.potential.PsA <- which((Closest.dist > buffer) & sampling.sites_coords$env_data==TRUE)
+    
+    # Compute weights for probability of drawing a site
+    weights <-  Closest.dist[index.potential.PsA]
+    # weights <-  1/(weights*weights) # Weights are inversly proportionnal to the square of distance such as 1/d²
+    weights <-  1/(weights) # Weights are inversly proportionnal to distance such as 1/d
+    # weights <- (weights - min(weights)) / (max(weights) - min(weights)) # Normalise to 0 - 1 range
+    
+    # Generate temporary PA.table to store indices of sampling sites
+    
+    if (ModeleType=="restricted") {
+      n.PsA.set <- 9 # 9 PsA for OMU with limited N.obs
+    } else { 
+      n.PsA.set <- 3  # 3 PsA sets for OMU with enough N.obs to do CV
+    } 
+    
+    PA.indices.table <- data.frame(matrix(nrow = N.obs, ncol = n.PsA.set))
+    for (i in 1:n.PsA.set) {
+      PA.indices.table[,i] <- sample(x = index.potential.PsA, size = N.obs, prob = weights, replace = F)
+    }
+    PA.list <- as.vector(as.matrix(PA.indices.table)) # Concatenate in a single vector all the indices of sample sites to use as PsA
+    
+    PA_set <- as.factor(as.vector(matrix(data = 1:n.PsA.set, byrow = T, nrow = N.obs, ncol = n.PsA.set))) # Generate a vector of PsA set attribution
+    ggplot.table <- tibble("indices" = PA.list, "PA_set" = PA_set, "dist" = Closest.dist[PA.list], "weights" = 1/Closest.dist[PA.list])
+    
+    ### 3.3.2/ Plot probability distribution of selected PsA for each set ####
+    
+    pdf(file = paste0("../input_data/Species_data/Pseudo_absences/Proba_distri_PsA_",unit,".pdf"), height = 8, width = 8)
+    g <- ggplot.table %>% 
+      ggplot(aes(x = dist, y = weights, colour = PA_set)) +
+      geom_point(size = 3, alpha = 0.5, fill = NA, position = position_jitter(width = max(ggplot.table$dist)/50, height = max(ggplot.table$weights)/50, seed = 5)) +
+      guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+      labs(title = paste0("Probability distribution of PsA for ", unit),
+           x = "Distance in km", y = "Weights")
+    print(g)
+    dev.off()  
+    
+    # Copy in the sp folder
+    file.copy(from = paste0("../input_data/Species_data*/Pseudo_absences/Proba_distri_PsA_",unit,".pdf"), to = paste0("../maps/By_sp/",sp,"/Proba_distri_PsA_",unit,".pdf"), overwrite = T)
+    
+     ### 3.3.3/ Plot selected PsA of each set on a map ####
+   unit_pointsMW<-spTransform(unit_points, CRSobj =CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs") ) ##Back to MW for mapping
+  
+    
+        
+    ###########Problem with moll proj so need to get the original x y set 
+    SSCMW<-sampling.sites_coords #get data 
+    SSCMW$id<-1:nrow(SSCMW) #to keep row order
+    SSCMW2<-merge(SSCMW, unique(Occ_used_for_SDM[,c("LonWGS","LatWGS","x","y")]), by.x=c("x","y"), by.y=c("LonWGS", "LatWGS")) #merge with original moll coords
+    row.names(SSCMW2)<-SSCMW2$id
+    SSCMW2<-SSCMW2[order(SSCMW2$id),] #original order
+    SSCMW2=SSCMW2%>%
+      rename (xWGS=x, yWGS=y, x=x.y, y=y.y)
+    
+      
+    sampling.sites_coordsMW<- SpatialPointsDataFrame(data = SSCMW2,
+                         coords = sampling.sites_coords[, c("x", "y")], 
+                         proj4string =  CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+
+    
+    
+    pdf(file = paste0("../input_data/Species_data/Pseudo_absences/PsA_map_",unit,".pdf"), height = 8, width = 8) 
+    plot(Var_stack_final[["elev"]], main = unit)
+    for (i in 1:n.PsA.set) {
+      points(sampling.sites_coordsMW[PA.indices.table[,i], 1:2], col = c("red","darkgreen","blue", "gold","cyan","limegreen","purple","grey","orange","deeppink")[i], pch = 1, cex = 0.7)
+      points(unit_pointsMW, col = "red", cex = 1.1, pch = 16)
+      points(unit_pointsMW, cex = 1, pch = 16)
+    }
+    legend(legend = c("Presences",paste0(rep("PA",n.PsA.set),1:n.PsA.set)), pch = c(16, rep(1,n.PsA.set)), 
+           col = c("black","red","darkgreen", "blue","gold","cyan","limegreen","purple","grey","orange","deeppink")[1:n.PsA.set],
+           x = "bottomleft", pt.cex = 1, cex = 0.9, bty ="o")
+    dev.off()
+    
+      # Copy in the sp folder for Maps
+    file.copy(from =  paste0("../input_data/Species_data/Pseudo_absences/PsA_map_",unit,".pdf"), to = paste0("../Maps/By_sp/",sp,"/PsA_map_",unit,".jpeg"), overwrite = T)
+    
+
+       
+    ### 3.3.4/ Retrieve coordinates of PsA and save in sp object ####
+    Occ.coord <- unit_points@coords
+    PsA.coord <- sampling.sites_coords[PA.list, 1:2]
+    names(Occ.coord) <- names(PsA.coord) <- c("x", "y")
+    All.coord <- rbind(Occ.coord,PsA.coord)
+    
+    # Append the spatial object for this unit, adding the PsA
+    
+    unit_points.PsA <- spTransform(SpatialPointsDataFrame(All.coord, # Coordinates of occurrences data and PsA
+                                              data = data.frame(Presences_Pseudo.Absences = c(rep(x = 1, times = nrow(Occ.coord)), rep(x = NA, times = nrow(PsA.coord)))), # 1 = Presence point, NA = PsA
+                                              proj4string = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0")),
+                                   CRSobj=CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))# Define CRS
+    
+    
+    
+    save(unit_points.PsA, file = paste0("../input_data/Species_data/Spatial_Points_Objects/occ_&_PsA_", unit,".RData"))
+    saveRDS(unit_points.PsA, file = paste0("../input_data/Species_data/Spatial_Points_Objects/occ_&_PsA_", unit,".rds"))
+    
+     
+   
+    ### 3.3.5/ Generate the associated PA.table for Biomod2 ####
+    
+    # Fill a df with F value. One row = one occurrence or PsA. One column = One PSA run
+    PA.table <- data.frame(matrix(data = F, nrow = N.obs*(n.PsA.set+1), ncol = n.PsA.set))
+    
+    # Fill occurrences point rows with T
+    PA.table[1:N.obs,] <- T # All presences need to be taken at all time
+    
+    # Fill PsA point rows with T, only for their PsA run
+    for (i in 1:n.PsA.set) {
+      PA.table[(N.obs+((i-1)*N.obs)+1):(N.obs+(i*N.obs)), i] <- T # Take only the 9 PsA associated with the random sampling
+    }
+    
+    names(PA.table) <- paste0("PA", 1:n.PsA.set)
+    
+    save(PA.table, file = paste0("../input_data/Species_data/PA.Tables/PA.table_", unit,".RData"))
+    saveRDS(PA.table, file = paste0("../input_data/Species_data/PA.Tables/PA.table_", unit,".rds"))
+    
+    cat(paste0(Sys.time(), " - Pseudo-Absences Generation for ", unit, " = Unit N°",k," - Done\n"))
+    
+  }
+  
+}
+
+# Close clusters generated with registerDoParallel(numCores)
+ stopImplicitCluster()
+# Close clusters generated with makeCluster 
+#stopCluster() 
+
+```
+
+

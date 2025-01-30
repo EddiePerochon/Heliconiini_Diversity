@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+.gri filter=lfs diff=lfs merge=lfs -text
+*.gri filter=lfs diff=lfs merge=lfs -text
+*Sampling.sites.RData filter=lfs diff=lfs merge=lfs -text
+*Sampling.sites.Dist.RData filter=lfs diff=lfs merge=lfs -text

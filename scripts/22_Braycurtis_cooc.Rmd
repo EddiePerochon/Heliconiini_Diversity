@@ -1,0 +1,815 @@
+---
+title: "22_Bray_curtis_cooc"
+author: "Eddie Pérochon"
+date: "01/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 22: Bray Curtis index #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+##### Community structure with Bray-Curtis indices on comimetic pairs of ssps & OMUs #####
+
+# Compute BC indices for all ssps & OMUs
+# Compute mean BC for mimics only and non-mimics only
+# Compute mean BC per mimicry rings
+# Generate null distribution with randomization of mimicry patterns
+# Plot test results
+
+
+### Inputs 
+# Inputs
+# Summary table of ssps & OMUs
+# Stack of ssps & OMUs probabilities of presence
+
+###
+
+### Outputs
+
+# Matrix of probabilities of presence for ssps & OMUs x communities
+# BC indices for all pairs of ssps, only comimics, only non-comimics, and per rings, and associated means
+# Null distribution of mean values
+# Plot of null distribution and test for all rings, and per rings
+# Summary table for each ring of BC values
+
+# Final plot with null distri for Ist and mean BC for comimics
+
+###
+
+
+```{r}
+rm(list = ls())
+
+library(raster)
+library(vegan)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+### 1/ Load stuff ####
+
+# Load summary table for unit & omu list
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"))
+# list_occ <- list_occ[!is.na(list_occ$MR_ss),] # Filter not needed if all MR_ss have been fixed
+# load(file = "../input_data/occurences_df/list_OMU.RData")
+
+load(file="../input_data/envData/continent_mask.RData")
+
+# Load OMU/unit probability stack
+
+# # list_OMU$OMU2<-str_replace_all( list_OMU$OMU, c("DENNIS.RAY"="DENNIS-RAY", "HALF.DENNIS"="HALF-DENNIS", "ST.ANDREW"="ST ANDREW", "POSTMAN.REVERSE"="POSTMAN REVERSE", "BLUE.MASK"="BLUE MASK", "RED.BAND"="RED BAND") )
+# save(list_OMU, file="../input_data/occurences_df/list_OMU.RData")
+
+for(m in c("ss", "sl"))
+# for(m in c("sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+OMU_proba_stack <- continent_mask
+list_OMU <- unique(list_occ[, paste0("OMU_",m)])
+  
+for(i in 1:length(list_OMU))
+{
+  
+OMU <- list_OMU[i]
+  
+OMU_layer <- readRDS(file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.80_",OMU,".RDS"))
+OMU_proba_stack <- stack(OMU_proba_stack, OMU_layer)
+
+if (i %% 10 == 0) { print(i) }
+}
+OMU_proba_stack <- dropLayer(OMU_proba_stack, 1)
+names(OMU_proba_stack) <- list_OMU
+
+save(OMU_proba_stack, file=paste0("../input_data/Species_data/OMU_proba_stack_",m,".RData"))
+saveRDS(OMU_proba_stack, file=paste0("../input_data/Species_data/OMU_proba_stack_",m,".RDS"))
+
+## Load ssp proba stack
+
+ssp_proba_stack <- continent_mask
+
+for(i in 1:nrow(list_occ))
+{
+  
+  ssp<-list_occ$biomodTag[i]
+if(list_occ$initial_model_type[i]=="rasterized")
+{
+load(file = paste0("../outputs/By_unit/",ssp,"/raster_stack_cropped.RData"))
+  ssp_layer<-Select_raster_stack_cropped
+}
+  else {
+    ssp_layer<-readRDS(paste0("../outputs/By_unit/",ssp,"/all_EM_Jaccard_buffer_80.RDS"))[[1]]
+  }
+ssp_proba_stack <- stack(ssp_proba_stack, ssp_layer)
+if (i %% 10 == 0) {print(i)}
+}
+ssp_proba_stack <- dropLayer(ssp_proba_stack, 1)
+names(ssp_proba_stack) <- list_occ$biomodTag
+save(ssp_proba_stack, file = "../input_data/Species_data/ssp_proba_stack.RData")
+saveRDS(ssp_proba_stack, file = "../input_data/Species_data/ssp_proba_stack.RDS")
+
+
+### 2/ Generate matrix communities * OMU for probabilities of presence ####
+
+cat(paste0(Sys.time()," - Generate matrix communities * OMU for probabilities of presence for ",m,"\n"))
+
+ssp_proba_stack <- readRDS(file = "../input_data/Species_data/ssp_proba_stack.rds")
+OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/OMU_proba_stack_",m,".RDS"))
+
+OMU_proba_brick <- readAll(OMU_proba_stack*1)
+com_unit_mat <- NA
+for (i in 1:nlayers(OMU_proba_brick)) 
+{
+  if (i==1)
+  {
+    com_unit_mat <- OMU_proba_brick[[i]]@data@values
+  } else {
+    unit.values <- OMU_proba_brick[[i]]@data@values
+    com_unit_mat <- cbind(com_unit_mat, unit.values)
+  }
+  if (i %% 10 == 0) {print(i)}
+}
+colnames(com_unit_mat) <- names(OMU_proba_stack)
+rm(OMU_proba_brick)
+
+
+ssp_proba_brick <- readAll(ssp_proba_stack*1)
+com_ssp_mat <- NA
+for (i in 1:nlayers(ssp_proba_brick)) 
+{
+  if (i==1){
+    com_ssp_mat <- ssp_proba_brick[[i]]@data@values
+  }else{
+    unit.values <- ssp_proba_brick[[i]]@data@values
+    com_ssp_mat<- cbind(com_ssp_mat, unit.values)
+  }
+  if (i %% 10 == 0) {print(i)}
+}
+colnames(com_ssp_mat) <- names(ssp_proba_stack)
+rm(ssp_proba_brick)
+
+saveRDS(com_unit_mat, file = paste0( "../input_data/com_unit_mat_",m,".rds"))
+saveRDS(com_ssp_mat, file =paste0("../input_data/com_ssp_mat.rds"))
+
+
+# Filter out communities with NA
+real_com_index <- NA
+for (j in 1:2)
+{
+  if(j==1)
+  {
+    mod=com_unit_mat
+    modname="com_unit_mat"
+  } else {
+    mod=com_ssp_mat
+    modname="com_ssp_mat"
+  }
+
+ for (i in 1:nrow(mod)) 
+ {
+  com.row <- mod[i,]
+  real_com_index[i] <- (!any(is.na(com.row)))&(!any(is.nan(com.row)))
+ }
+ Filtered_com <- mod[real_com_index,]
+ nrow(Filtered_com) # 30555 community with no NA
+ if(j == 2)
+ {
+  saveRDS(Filtered_com, file = paste0("../input_data/SDM_stacks/Filtered",modname,".rds"))
+ }
+
+ if(j == 1)
+ {
+  saveRDS(Filtered_com, file = paste0("../input_data/SDM_stacks/Filtered",modname,"_",m,".rds"))
+ }
+}
+
+
+### 3/ Compute Bray-Curtis indices ####
+
+# Load directly the matrix of community * units probability presence
+com_unit_mat <- readRDS(file = paste0("../input_data/SDM_stacks/Filteredcom_unit_mat_",m,".rds"))
+com_ssp_mat <- readRDS(file = paste0("../input_data/SDM_stacks/Filteredcom_ssp_mat.rds"))
+
+# colnames(com_unit_mat)
+# colnames(com_ssp_mat)
+
+### 3.1/ Compute Bray-Curtis index for all pairs of units ####
+
+cat(paste0(Sys.time()," - Compute Bray-Curtis indices for all pairs for ",m,"\n"))
+
+library(vegan)
+
+# names(list_OMU)<-c("biomodTag","Ring","", "OMU2")
+# 
+# list_occ$Ring<-str_replace_all( list_occ$Mimicry_ring, c("DENNIS-RAY"="DENNIS.RAY", "HALF-DENNIS"="HALF.DENNIS", "ST ANDREW"="ST.ANDREW", "POSTMAN REVERSE"="POSTMAN.REVERSE", "BLUE MASK"="BLUE.MASK", "RED BAND"="RED.BAND") )
+
+v = colSums(com_ssp_mat) == 0 # 5 subspecies with small distributions have 0 presence pixels. Can't manage to find why. Ignore them in computations
+table(v)
+
+# Loop per OMU and ssp
+for (k in 1:2)
+{
+  if(k==1) # For OMU
+  {
+    mod = com_unit_mat
+    modname = "com_unit_mat"
+    typename = "OMU"
+    list_type = list_OMU
+  } else { # For ssp
+    mod = com_ssp_mat[, v==FALSE]
+    modname = "com_ssp_mat"
+    typename = "ssp"
+    list_type = list_occ[v==FALSE,]
+  }
+
+dim(mod) # 434 ssp with raster data; 141 OMU ss; 108 OMU sl
+unit_BC_dist <- vegdist(x = t(mod), method = "bray") # Compute dissimilarities between rows
+
+saveRDS(unit_BC_dist, file = paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".rds"))
+save(unit_BC_dist, file =paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".RData"))
+
+# Load directly the vector of BD distances among all units
+unit_BC_dist <- readRDS(file = paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".rds"))
+
+if(typename == "OMU")
+{
+  stack_name <-  paste0("../input_data/Species_data/",typename,"_proba_stack_",m,".RDS")
+} else {
+  stack_name <-  paste0("../input_data/Species_data/",typename,"_proba_stack.RDS")
+}
+
+unit_proba_stack <- readRDS(file = stack_name)
+
+if(typename=="ssp")
+{
+unit_proba_stack <- subset(unit_proba_stack, which(v==FALSE))
+tag <- "biomodTag"
+} else {
+ tag <-  paste0("OMU_",m)
+}
+# hist(unit_BC_dist)
+
+unit_BC_dist_mat <- as.matrix(unit_BC_dist)
+colnames(unit_BC_dist_mat)
+row.names(unit_BC_dist_mat)
+
+mimicry.list <- as.character(unique(list_occ[,paste0("MR_", m)]))
+
+
+### 3.2/ Compute mean BC per mimicry rings ####
+
+cat(paste0(Sys.time()," - Compute mean BC per rings/groups for ",m,"\n"))
+
+mean_BC <- NA
+for (i in 1:length(mimicry.list)) # Per mimicry rings
+{ 
+  # i <- 17
+  
+  ring <- mimicry.list[i]
+  
+  # Get names and indices of all units/OMUs for this ring
+  tags <- as.character(list_occ[,tag][list_occ[,paste0("MR_",m)] == ring]) # Get names of all OMUs in the ring
+  tags <- unique(tags[tags %in% names(unit_proba_stack)])
+  
+  index <- which(names(unit_proba_stack) %in% tags) # Get index of layer for these OMUs/ssp
+  # index <- which(colnames(unit_BC_dist_mat) %in% tags) # Get index of layer for these OMUs/ssp
+  
+  if (length(tags) == 1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+  {
+    mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs indices (no pairs of OMUs)
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/mat.index.",ring,"_",typename,"_",m,".RData"))
+    BC <- c() # Empty vector of Bray-Curtis values
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/BC.",ring,"_",typename,"_",m,".RData"))
+    mean_BC[i] <- NA
+  } else { # Case with at least 2 OMUs.
+    mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/mat.index.",ring,"_",typename,"_",m,".RData"))
+    BC <- c(rep(1, ncol(mat.index))) # Initiate the vector used to store all BC values
+    for (j in 1:ncol(mat.index)) # For each pair of OMUs
+    {
+      BC[j] <- unit_BC_dist_mat[mat.index[1,j], mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+    }
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/BC.",ring,"_",typename,"_",m,".RData")) # Save the vector of BC for all pairs of OMUs in this ring
+    mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+  }
+  
+  cat(paste0(Sys.time(), " - ", ring," - n°",i, " on ",length(mimicry.list),"\n"))
+  
+}
+names(mean_BC) <- mimicry.list # Associate mean BC value with ring name
+save(mean_BC, file = paste0("../outputs/Community_Structure/mean_BC_",typename,"_",m,".RData")) # Save final vector with mean BC values per ring
+saveRDS(mean_BC, file = paste0("../outputs/Community_Structure/mean_BC_",typename,"_",m,".rds")) # Save final vector with mean BC values per ring
+
+# Load mean BC of mimicry rings
+load(file = paste0("../outputs/Community_Structure/mean_BC_",typename,"_",m,".RData"))
+mean_BC
+
+### 3.3/ Compute mean BC for all comimics, all rings taken into account ####
+
+cat(paste0(Sys.time(), " - Compute Global mean BC for ",m,"\n"))
+
+# Retrieve all co-mimic coordinates
+
+all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow=2)) # Generate empty df to store indices of pairs of comimics
+for (i in 1:length(mimicry.list))  # Per mimetic ring
+{ 
+  ring <- mimicry.list[i]
+  load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/mat.index.",ring,"_",typename,"_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+  all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+}
+dim(all_mimic_mat_index) 
+# 14 659 pairs of co-mimic OMUs sl
+# 383 pairs of co-mimic OMUs ss
+
+save(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/all_mimic_mat_index_",typename,"_",m,".RData"))
+saveRDS(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/all_mimic_mat_index_",typename,"_",m,".rds"))
+
+# Retrieve all co-mimic BC values and non-co-mimic BC values at the same time
+BC_mimic <- NA # Initiate final vector to store BC values for comimics
+unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+for (j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+{
+  BC_mimic[j] <- unlist(unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]]) # Extract BC index for this pair of comimics
+  unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  if (j %% 1000 == 0) {print(j)}
+}
+length(BC_mimic) 
+# 14 659 pairs of co-mimic OMUs
+# 383 pairs of co-mimic OMUs ss
+
+save(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimic_",typename,"_",m,".RData")) # Save final vector with all BC values for comimics
+saveRDS(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimic_",typename,"_",m,".rds")) # Save final vector with all BC values for comimics
+
+# Retrieve all non-mimic BC values
+BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+length(BC_no_mimic) 
+# 291 494 pairs of non-mimic OMUs sl
+# 9,487 pairs of non-mimic OMUs ss
+
+save(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_no_mimic_",typename,"_",m,".RData")) # Save final vector with all BC values for non-comimics
+saveRDS(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_no_mimic_",typename,"_",m,".rds")) # Save final vector with all BC values for non-comimics
+
+
+# Compute mean obs BC for each group
+load(file = paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".RData")) # All BC index (distance format)
+load(file = paste0("../outputs/Community_Structure/BC_mimic_",typename,"_",m,".RData")) # Only mimic pairs (vector format)
+load(file = paste0("../outputs/Community_Structure/BC_no_mimic_",typename,"_",m,".RData")) # Only non mimic pairs (vector format)
+
+Global_mean_BC <- mean(unit_BC_dist) ; Global_mean_BC # 0.892
+Global_mimic_mean_BC <- mean(BC_mimic) ; Global_mimic_mean_BC # 0.716
+Global_no.mimic_mean_BC <- mean(BC_no_mimic) ; Global_no.mimic_mean_BC # 0.900
+
+# Save all mean BC values for all pairs, only co-mimics, only non-comimics
+save(Global_mean_BC, Global_mimic_mean_BC, Global_no.mimic_mean_BC, file = paste0( "../outputs/Community_Structure/All_Global_BC_",typename,"_",m,".RData"))
+
+# Quick ugly boxplots
+All_BC <- c(BC_mimic, BC_no_mimic)
+Status <- as.factor(c(rep("Mimic", length(BC_mimic)), rep("Non-Mimic", length(BC_no_mimic))))
+boxplot(All_BC ~ Status)
+
+library(ggplot2)
+
+boxplot_df <- data.frame(All_BC, Status, stringsAsFactors = T)
+gg_boxplot <- ggplot(data = boxplot_df, aes(x = Status, y = All_BC)) +
+  geom_violin() +
+  coord_trans(y = "exp")
+print(gg_boxplot)
+
+# Histogram
+# Plot distri of BC for mimic pairs
+pdf(file = paste0("../outputs/Community_Structure/hist_BC_mimic_",typename,"_",m,".pdf"), height = 6.3, width = 6.5)
+hist(BC_mimic, xlab = "Bray-Curtis index", main = "Bray-Curtis indices of comimic pairs")
+abline(v = mean(BC_mimic), col = "red", lty = 2, lwd = 2)
+legend(legend = c(paste0("Mean = ", round(mean(BC_mimic, na.rm = T),3)), 
+                  paste0("CI 5% = ", round(quantile(BC_mimic, 0.05),3)),
+                  paste0("CI 95% = ", round(quantile(BC_mimic, 0.95),3))),
+       x = "topleft", cex = 1, bty ="n") 
+dev.off()
+}
+
+
+##### 4/ Generate new virtual community matrices under null hypothesis of no effect of mimicry ring on OMUs presence ####
+# analogous to DeVries et al.'s [1999] and Hill's [2010] test of mimicry structure across microhabitats
+
+cat(paste0(Sys.time()," - Run permutations for ",m,"\n"))
+
+# Load directly the vector of BC distances among all units
+for (l in 1:2) {
+  if(l==1)
+  {mod=com_unit_mat
+  modname="com_unit_mat"
+  typename="OMU"
+  list_type=list_OMU}
+  else {mod=com_ssp_mat[, v==FALSE]
+  modname="com_ssp_mat"
+  typename="ssp"
+  list_type=list_occ[v==FALSE,]}
+
+mimicry.list <- as.character(unique(list_occ[,paste0("MR_", m)]))
+
+if(typename == "ssp")
+{
+  unit_BC_dist <- readRDS(file = paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".rds"))
+  unit_BC_dist_mat <- as.matrix(unit_BC_dist)
+  OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/",typename,"_proba_stack.RDS"))
+  OMU_proba_stack<- subset(OMU_proba_stack, which(v==FALSE))
+  tag <- "biomodTag"
+} else{
+  unit_BC_dist <- readRDS(file = paste0("../outputs/Community_Structure/",typename,"_BC_dist_",m,".rds"))
+  unit_BC_dist_mat <- as.matrix(unit_BC_dist)
+  tag <- paste0("OMU_", m)
+  OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/",typename,"_proba_stack_",m,".RDS"))
+}
+
+
+## Start the loop for permutations
+
+# Set seed for reproducibility
+set.seed(seed = 1234)
+
+BC_mimic_null <- BC_no_mimic_null <- NA # Create vectors to store simulated mean BC values for co-mimics and non-comimics
+mean_BC_null <- matrix(ncol = length(mimicry.list), nrow = 0) # Create matrix to store mean simulated BC values for each mimicry ring for each simulation
+
+for (k in 1:999) # 999 simulations/permutations
+# for (k in 382:999) 
+{ 
+  # k <- 1
+  ## Shuffle mimicry ring among units
+  shuffle.list.unit <- list_occ
+  shuffle.list.unit$Ring <- sample(as.character(list_occ[,paste0("MR_",m)]), replace = F)
+  
+  # # Check if number of unit per ring is preserved
+  # table(list.unit$Mimicry.model)
+  # table(shuffle.list.unit$Mimicry.model)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+  mimicry.list <- as.character(unique(list_occ[,paste0("MR_",m)])) # 44 Mimicry rings
+  
+  mean_BC <- NA
+  for (i in 1:length(mimicry.list)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- unique(as.character(list_occ[,tag][shuffle.list.unit$Ring == ring]))
+    tags <- tags[tags %in% names(OMU_proba_stack)]
+    index <- which(names(OMU_proba_stack) %in% tags)
+    
+    if (length(tags) < 2) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_",typename,"_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_BC[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_",typename,"_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      BC <- NA # Initiate the vector used to store all BC values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        BC[j] <- unit_BC_dist_mat[mat.index[1,j],mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+      }
+      mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_BC) <- mimicry.list
+  mean_BC_null <- rbind(mean_BC_null,mean_BC) # Store the mean BC vector into the matrix of simulations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list)) { # Per mimicry rings
+    ring <- mimicry.list[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_",typename,"_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) # 14 659 pairs of mimic units
+  
+  # Retrieve all mimic values and non-co-mimic BC values at the same time
+  BC_mimic <- NA # Initiate final vector to store BC values for comimics
+  unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    BC_mimic[j] <- unlist(unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]]) # Extract BC index for this pair of comimics
+    unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  }
+  # length(BC_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+  # length(BC_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  BC_mimic_null[k] <- mean(BC_mimic)
+  BC_no_mimic_null[k] <- mean(BC_no_mimic)
+  
+  if (k %% 10 == 0)
+  {
+    cat(paste0(Sys.time()," - Permutation n°", k," out of 1000 - For ",m,"\n"))
+  }
+  
+  save(mean_BC_null, BC_mimic_null, BC_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_",typename,"_",m,".RData"))
+}
+
+summary(mean_BC_null)     # Per mimicry ring
+summary(BC_mimic_null)    # For all comimic pairs
+summary(BC_no_mimic_null) # For all non-comimic pairs
+
+cat(paste0(Sys.time()," - Done for all ",typename," for ",m,"\n"))
+
+}
+
+##### 5/ Plot distri of null mean BC ####
+
+# Loop per OMU and ssp
+for (l in 1:2) {
+  if(l==1)
+  {
+    mod=com_unit_mat
+    modname="com_unit_mat"
+    typename="OMU"
+    list_type = list_OMU
+    list_rings = str_split_i(string = list_type, pattern = "\\.", i = 3)
+  } else {
+    mod=com_ssp_mat[, v==FALSE]
+    modname="com_ssp_mat"
+    typename="ssp"
+    list_type = list_occ[v==FALSE,]
+    if (m == "ss")
+    {
+      list_rings = list_type$MR_ss
+    } else {
+      list_rings = list_type$MR_sl
+    }
+  }
+  
+### 5.1/ Plot for all comimics ####
+
+cat(paste0(Sys.time(), " - Plot histrogram of Global null distribution for ",typename," for ",m,"\n"))
+
+load(file = paste0("../outputs/Community_Structure/All_Global_BC_",typename,"_",m,".RData")) # Load mean BC obs values 
+load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_",typename,"_",m,".RData")) # Load null mean BC values
+
+pdf(file = paste0("../outputs/Community_Structure/BC_mimic_null_",typename,"_",m,".pdf", height = 5.3, width = 6.5))
+
+original_ext_margins <- par()$oma
+original_int_margins <- par()$mar
+par(oma = c(0,0,0,0), mar = c(5.1,8,4.1,4))
+
+hist(x = c(BC_mimic_null, Global_mimic_mean_BC), breaks = 40, freq = TRUE, col = "gray",
+     #xlim = c(0.70, 0.96),
+     #ylim = c(0, 400),
+     main = "Distribution of mean pairwise BC indices\nof co-mimetic OMUs\nunder null Hypothesis",
+     xlab = "Mean Bray-Curtis Index",
+     cex.axis = 1.3, cex.lab = 1.4, cex.main = 1.2, lwd = 2)
+
+arrows(Global_mimic_mean_BC + 0.0007, 75, Global_mimic_mean_BC+ 0.0007, 10, length = 0.1, lwd = 2)  # Draw arrow above mean BC obs
+abline(v = mean(c(BC_mimic_null, Global_mimic_mean_BC), na.rm=T), lwd = 2, lty = 2) # Add vertical line for mean value
+abline(v = quantile(c(BC_mimic_null, Global_mimic_mean_BC), 0.05, na.rm=T), lwd = 2, lty = 2, col = "red") # Add vertical line for 95% value
+
+legend(legend = c(paste0("Mean = ", format(round(mean(c(BC_mimic_null, Global_mimic_mean_BC), na.rm=T),3), nsmall = 3)), 
+                  paste0("CI 5% = ", round(quantile(c(BC_mimic_null, Global_mimic_mean_BC), 0.05, na.rm=T),3))), 
+       x = "topleft", inset = c(0, 0.17), 
+       lty = 2 , lwd = 2, col = c("black", "red"), cex = 1.2, bty = "n")
+legend(legend = c(paste0("Mean BC obs = ", round(Global_mimic_mean_BC, 3)),
+                  paste0("p = 0.001")),
+       x = "left", inset = c(0.00, -0.05),
+       cex = 1.2, bty ="n", xjust = 1)
+
+legend(legend = as.expression(bquote(bold("B"))), 
+       x = "topleft", inset = c(-0.03, 0.001), xjust = 0.5,
+       cex = 1.3, bty ="n")
+
+par(oma = original_ext_margins, mar = original_int_margins)
+
+dev.off()
+
+
+### 5.2/ Plot distri of null BC per mimicry ring co-mimics ####
+
+cat(paste0(Sys.time(), " - Plot histrogram of null distribution per groups/rings for ",typename," for ",m,"\n"))
+
+load(file = paste0("../outputs/Community_Structure/mean_BC_",typename,"_",m,".RData")) # Load mean BC obs value for each ring
+load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_",typename,"_",m,".RData")) # Load null mean BC values
+
+# Build summary table for mimicry ring BC results at the same time
+BC_ring_summary_table <- as.data.frame(matrix(ncol = 8, nrow = 39, data = NA))
+names(BC_ring_summary_table) <- c("ring", "N_units", "N_pairs", "BC_obs", "mean_BC", "BC_2.5", "BC_97.5", "p_value")
+
+for (i in 1:length(mimicry.list))  # Per mimicry ring
+{
+  # i <- 1
+  
+  BC_ring_summary_table$ring[i] <- ring <- mimicry.list[i] # Get ring name
+  BC_ring_summary_table$N_units[i] <- N_units <- sum(list_rings == ring) # Get number of OMUs
+  BC_ring_summary_table$N_pairs[i] <- N_pairs <- N_units*(N_units-1)/2 # Get number of pairs
+  
+  if (is.na(mean_BC[i]))# Case for ring with no pair of OMUs (only one OMU/species)
+  {
+    # Plot BC null distri for this ring (i.e. NA message)
+    pdf(file = paste0("../outputs/Community_Structure/Per_mimicry_ring/BC_mimic_null_",ring,"_",typename,"_",m,".pdf"), height = 5.3, width = 6.5)
+    
+    plot(1:100,1:100, type = "n", main = paste0("Distribution of mean pairwise Bray-Curtis indices\nof ", ring, " ", typename, "\nunder null Hypothesis"))
+    text(x = 50, y = 50, labels = "Only one OMU for this mimicry ring \n No pair available for index computation")
+    
+    dev.off()
+    
+  } else { # Case for ring with pair(s) of OMUs 
+    
+    BC_ring_summary_table$BC_obs[i] <- round(mean_BC[i],3) # Get mean BC obs
+    BC_ring_summary_table$mean_BC[i] <- round(mean(c(mean_BC_null[,i], mean_BC[i]), na.rm = T),3) # Get mean of mean BC null from simulations
+    BC_ring_summary_table$BC_2.5[i] <- round(quantile(c(mean_BC_null[,i], mean_BC[i]), 0.025, na.rm=T),3) # Get 2.5% quantile of mean BC null from simulations
+    BC_ring_summary_table$BC_97.5[i] <- round(quantile(c(mean_BC_null[,i], mean_BC[i]), 0.975, na.rm=T),3) # Get 97.5% quantile of mean BC null from simulations
+    BC_ring_summary_table$p_value[i] <- round(ecdf(x = c(mean_BC_null[,i], mean_BC[i]))(mean_BC[i]),3) # Get p-value from simulations
+    
+    save(BC_ring_summary_table, file =paste0( "../outputs/Community_Structure/BC_ring_summary_table_",typename,"_",m,".Rdata"))
+    
+    # Plot BC null distri for this ring
+    pdf(file = paste0("../outputs/Community_Structure/Per_mimicry_ring/BC_mimic_null_",ring,"_",typename,"_",m,".pdf"), height = 5.3, width = 6.5)
+    
+    hist(c(mean_BC_null[,i], mean_BC[i]), 
+         breaks = seq(from = floor(floor(min(min(mean_BC_null[,i], na.rm=T), mean_BC[i])*1000)/2)/500, to = ceiling(ceiling(max(max(mean_BC_null[,i], na.rm=T), mean_BC[i])*1000)/2)/500, by = 0.002), 
+         xlab = "Mean pairwise Bray-Curtis index", 
+         main = paste0("Distribution of mean pairwise Bray-Curtis indices\nof ", ring, " ", typename, "s\nunder null Hypothesis"))
+    
+    # arrows(mean_BC[i] + 0.0001, 60, mean_BC[i] + 0.0001, 10, length = 0.1, lwd = 2)  # Draw arrow above mean BC obs
+    abline(v = mean_BC[i], lwd = 2, lty = 2, col = "red") # Add vertical line for mean BC obs value
+    
+    abline(v = mean(c(mean_BC_null[,i], mean_BC[i]), na.rm = T), lwd = 2, lty = 2) # Add vertical line for mean value
+    abline(v = quantile(c(mean_BC_null[,i], mean_BC[i]), 0.025, na.rm = T), lwd = 2, lty = 2, col = "grey30") # Add vertical line for 2.5% value
+    abline(v = quantile(c(mean_BC_null[,i], mean_BC[i]), 0.975, na.rm = T), lwd = 2, lty = 2, col = "grey30") # Add vertical line for 97.5% value
+    
+    legend(legend = c(paste0("N units = ", N_units), 
+                      paste0("N pairs = ", N_pairs)),
+           x = "topright", xjust = 1, cex = 1, bty ="n")
+    
+    legend(legend = c(paste0("Mean = ", round(mean(c(mean_BC_null[,i], mean_BC[i]), na.rm = T),3)), 
+                      paste0("CI 2.5% = ", round(quantile(c(mean_BC_null[,i], mean_BC[i]), 0.025, na.rm=T),3)),
+                      paste0("CI 97.5% = ", round(quantile(c(mean_BC_null[,i], mean_BC[i]), 0.975, na.rm=T),3))),
+           x = "topleft", cex = 1, bty ="n") 
+    
+    legend(legend = paste0("Mean BC obs = ", round(mean_BC[i], 3), "\n p = ", round(ecdf(x = mean_BC_null[,i])(mean_BC[i]),3)), 
+           inset = c(0, 0.2), text.col = "red", x = "bottomleft", cex = 1, bty ="n")
+    
+    dev.off()
+    
+    
+  }
+  
+  cat(paste0(i, " out of 39 - ",ring, " - Done \n"))
+}
+
+View(BC_ring_summary_table)
+write.csv2(BC_ring_summary_table, file = paste0( "../tables/BC_ring_summary_table_",typename,"_",m,".csv"))
+
+print(paste0("Done for all ",typename))
+}
+
+}
+
+# #Plot Bray curtis valors with distributions
+# library(raster)
+# library(rangeBuilder)
+# main_title_cex = 1                # Main title size
+# 
+# xlim = c(-5457, 4953)   # Limit of plot on x-axis (Longitude)
+# ylim = c(-4495, 5705)    # Limit of plot on y-axis (Latitude)
+# axis_cex = 1.4             # Axes size
+# 
+# xlab = ""                # X-axis label
+# ylab = ""                # Y-axis label
+# x_axis_breaks = c(-3930, -2170, -420, 1500, 3050)          # X-axis tick breaks
+# y_axis_breaks = c(-3650, -2450, -1220, 0, 1230, 2445, 3660, 4890)       # Y-axis tick breaks
+# x_axis_labels = c("120°E", "100°E", "80°E", "60°E", "40°E")    # X-axis tick labels
+# y_axis_labels = c("30°S", "20°S", "10°S", "0°", "10°N", "20°N", "30°N", "40°N")    # Y-axis tick labels
+# 
+#           # Legend title
+# legend_title_cex = 1.3   # Legend title size
+# legend_title_x = -3550   # Legend title x position
+# legend_title_y = 430     # Legend title y position
+# legend_cex = 1.4         # Legend size         # Legend tick positions
+# legend_location = c(-4100, -3800, -3950, 0)  # Legend position
+# 
+# scale_bar_position = c(-2600, -4000) # Scale bar position
+# 
+# arrow_scale = 0.55        # North arrow size
+# arrow_padin = c(0.15, 0.15) # North arrow position adjustement
+# 
+# facet_letter = ""               # Small case letter for facet
+# facet_letter_col = "black"         # Color of case letter for facet
+# facet_letter_cex = 2.2             # Size of small case letter for facet
+# facet_letter_inset = c(0, -0.008)
+# 
+# 
+# Hmm<-readRDS("../outputs/By_unit/Heliconius.melpomene.malleti/all_EM_Jaccard_buffer_80.rds")[[1]]
+# Hab<-readRDS("../outputs/By_unit/Heliconius.aoede.bartletti/all_EM_Jaccard_buffer_80.rds")[[1]]
+# Hee<-readRDS("../outputs/By_unit/Heliconius.erato.emma/all_EM_Jaccard_buffer_80.rds")[[1]]
+# Hsm<-readRDS("../outputs/By_unit/Heliconius.sara.magdalena/all_EM_Jaccard_buffer_80.rds")[[1]]
+# 
+# load("../input_data/envData/continent_mask.RData")
+# load("../input_data/envData/crop_shape.RData")
+# pal_bl_red_Mannion<-readRDS("../Maps/pal_bl_red_Mannion.rds")
+# sea_shp<-readRDS(file="../input_data/Map_stuff/sea_shp.RDS")
+# # Load mask for continent borders, plot border, and grid
+# grid_Mollweide_out <- readRDS(file = "../input_data/Map_stuff/grid_Mollweide_out.rds")
+# large_bg_mask_Mollweide <- readRDS(file = "../input_data/envData/crop_shape.RDS")
+# bbox_sp_Mollweide <- readRDS(file = "../input_data/Map_stuff/bbox_sp_Mollweide.rds")
+
+
+# pdf(file = paste0("../Maps/Bray_Curtis_maps.pdf"), height = 12, width = 12)
+# 
+# 
+# internal_margins <- par()$mar
+# # par(mar = c(3.1, 3.5, 3.5, 2.1))
+# par(mar = c(3.1, 3.1, 2.7, 1.6))
+# par(mfrow = c(2, 2))
+# 
+# 
+# ##Hmm
+#      image(Hmm, col= rev(terrain.colors(10)) , legend=FALSE, main = 
+#         expression(paste("Predictions for ", italic("Heliconius melpomene maletti "))), cex.axis = 1.4, cex.main = 1.2, axes=FALSE,
+#       ylab = "", xlab = "")
+#      
+#      plot(crop_shape, lwd = 1.2, border = "grey20", add = TRUE, legend=F)
+#      plot(sea_shp, legend=F, col="#E1f1f1", add=T )
+# plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+# plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+# plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+# 
+# axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+# axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+# addRasterLegend(Hmm, locs = seq(0, 0.85, 0.1), cex.axis = 1.2, ramp = rev(terrain.colors(10)), ncolors = 50, border = T, location = c(-4000, -3000, -3000, 0))
+#      graphics::text(x = -3500, y = 500, font = 2, cex = 1.2, label = "Habitat suitability")
+# 
+#      ##Hdd
+#      image(Hab, col= rev(terrain.colors(10)) , legend=FALSE, main = 
+#         expression(paste("Predictions for ", italic("Heliconius aoede bartletti "), "BC=0.16")), cex.axis = 1.4, cex.main = 1.2, axes=FALSE,
+#       ylab = "", xlab = "")
+#      
+#      plot(crop_shape, lwd = 1.2, border = "grey20", add = TRUE, legend=F)
+#      plot(sea_shp, legend=F, col="#E1f1f1", add=T )
+# plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+# plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+# plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+# 
+# axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+# axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+# addRasterLegend(Hab, locs = seq(0, 0.85, 0.1), cex.axis = 1.2, ramp = rev(terrain.colors(10)), ncolors = 50, border = T, location = c(-4000, -3000, -3000, 0))
+#      graphics::text(x = -3500, y = 500, font = 2, cex = 1.2, label = "Habitat suitability")
+#      
+# ##Hap
+#      image(Hee, col= rev(terrain.colors(10)) , legend=FALSE, main = 
+#         expression(paste("Predictions for ", italic("Heliconius erato emma "), "BC=0.73")), cex.axis = 1.4, cex.main = 1.2, axes=FALSE,
+#       ylab = "", xlab = "")
+#      
+#      plot(crop_shape, lwd = 1.2, border = "grey20", add = TRUE, legend=F)
+#      plot(sea_shp, legend=F, col="#E1f1f1", add=T )
+# plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+# plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+# plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+# 
+# axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+# axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+# addRasterLegend(Hee, locs = seq(0, 0.85, 0.1), cex.axis = 1.2, ramp = rev(terrain.colors(10)), ncolors = 50, border = T, location = c(-4000, -3000, -3000, 0))
+#      graphics::text(x = -3500, y = 500, font = 2, cex = 1.2, label = "Habitat suitability")
+#      
+# ##Hab
+#      image(Hsm, col= rev(terrain.colors(10)) , legend=FALSE, main = 
+#         expression(paste("Predictions for ", italic("Heliconius sara magdalena "), "BC=0.94")), cex.axis = 1.4, cex.main = 1.2, axes=FALSE,
+#       ylab = "", xlab = "")
+#      
+#      plot(crop_shape, lwd = 1.2, border = "grey20", add = TRUE, legend=F)
+#      plot(sea_shp, legend=F, col="#E1f1f1", add=T )
+# plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+# plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+# plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+# 
+# axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+# axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+# addRasterLegend(Hsm, locs = seq(0, 0.85, 0.1), cex.axis = 1.2, ramp = rev(terrain.colors(10)), ncolors = 50, border = T, location = c(-4000, -3000, -3000, 0))
+#      graphics::text(x = -3500, y = 500, font = 2, cex = 1.2, label = "Habitat suitability")
+#  
+# dev.off()     
+
+```
+
+

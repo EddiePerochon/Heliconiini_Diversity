@@ -1,0 +1,1718 @@
+---
+title: "23_Helico_Itho_BC"
+author: "Eddie Pérochon"
+date: "21/02/2022"
+output: html_document
+---
+
+
+##### Script 23: Bray Curtis index for Helico & Itho #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+##### Community structure with Bray-Curtis indices on comimetic pairs of OMUs for Heliconiini, Ithomiini, and Intertribe#####
+
+# Compute BC indices for all OMUs
+# Compute mean BC for mimics only and non-mimics only
+# Compute mean BC per mimicry rings
+# Generate null distribution with randomization of mimicry patterns
+# Plot test results
+
+### Inputs 
+# Inputs
+# Summary table of OMUs
+# Stack of OMUs probabilities of presence
+
+###
+
+### Outputs
+
+### For each groups (Helico, Itho, Inter)
+
+# Matrix of probabilities of presence for OMUs x communities
+# BC indices for all pairs of ssps, only comimics, only non-comimics, and per rings, and associated means
+# Null distribution of mean values
+# Plot of null distribution and test for all rings, and per rings
+# Summary table for each ring of BC values
+
+# Final plot with null distri for Ist and mean BC for comimics
+
+###
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+
+library(raster)
+library(vegan)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(formattable)
+library(tictoc)
+library(readxl)
+library(htmltools)
+library(webshot)    
+
+
+```
+
+```{r}
+#Export function for tables
+export_formattable <- function(f, file, width = "100%", height = NULL, 
+                               background = "white", delay = 0.2)
+    {
+      w <- as.htmlwidget(f, width = width, height = height)
+      path <- html_print(w, background = background, viewer = NULL)
+      url <- paste0("file:///", gsub("\\\\", "/", normalizePath(path)))
+      webshot(url,
+              file = file,
+              selector = ".formattable_widget",
+              delay = delay)
+    }
+```
+
+
+
+```{r}
+### 1/ Load stuff ####
+##Heliconiini
+# Load summary table for unit & omu list
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"))
+load(file="../input_data/envData/continent_mask.RData")
+
+for(m in c("ss", "sl"))
+{
+  list_OMU <- data.frame(OMU = unique(list_occ[,paste0("OMU_", m)]))
+
+
+# # Load OMU/unit probability stack
+# Helico_OMU_proba_stack<-continent_mask
+# list_OMU$OMU2<-str_replace_all( list_OMU$OMU, c("DENNIS.RAY"="DENNIS-RAY", "HALF.DENNIS"="HALF-DENNIS", "ST.ANDREW"="ST ANDREW", "POSTMAN.REVERSE"="POSTMAN REVERSE", "BLUE.MASK"="BLUE MASK", "RED.BAND"="RED BAND") )
+# save(list_OMU, file="../input_data/occurences_df/list_OMU.RData")
+# for(i in 1:nrow(list_OMU))
+# {
+#   
+#   OMU<-list_OMU$OMU2[i]
+# OMU_layer<-readRDS(file = paste0("../outputs/By_OMU/",OMU,"/cont_Jaccard.80_",OMU,".RDS"))
+# Helico_OMU_proba_stack <- stack(Helico_OMU_proba_stack, OMU_layer)
+# if (i %% 10 == 0) {print(i)}
+# }
+# Helico_OMU_proba_stack<-dropLayer(Helico_OMU_proba_stack, 1)
+# names(Helico_OMU_proba_stack)<-list_OMU$OMU2
+# 
+# save(Helico_OMU_proba_stack, file="../input_data/Species_data/Helico_OMU_proba_stack.RData")
+# saveRDS(Helico_OMU_proba_stack, file="../input_data/Species_data/Helico_OMU_proba_stack.RDS")
+# 
+# #load ring stack
+# list_rings_H<-sort(unique(list_occ$Mimicry_ring))
+# 
+# Helico_ring_proba_stack<-continent_mask
+# 
+# for(i in 1:length(list_rings_H))
+# {
+#   
+#   ring<-list_rings_H[i]
+# ring_layer<-readRDS(file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_Jaccard.80_",ring,".RDS"))
+# Helico_ring_proba_stack <- stack(Helico_ring_proba_stack, ring_layer)
+# if (i %% 10 == 0) {print(i)}
+# }
+# 
+# Helico_ring_proba_stack<-dropLayer(Helico_ring_proba_stack, 1)
+# names(Helico_ring_proba_stack)<-list_rings_H
+# 
+# save(Helico_ring_proba_stack, file="../input_data/Species_data/Helico_ring_proba_stack.RData")
+# saveRDS(Helico_ring_proba_stack, file="../input_data/Species_data/Helico_ring_proba_stack.RDS")
+
+Helico_OMU_proba_stack<-readRDS(file=paste0("../input_data/Species_data/OMU_proba_stack_",m,".RDS"))
+
+Helico_ring_proba_stack<-readRDS(file= paste0("../input_data/Species_data/All_ring_proba_stack_Jaccard_",m,".80.RDS"))
+
+##Ithomiini
+# Itho_ring_proba_stack<-readAll(readRDS("../Ithomiini/All_ring_proba_stack_Jaccard.80.RData"))
+# 
+# Itho_ring_proba_stack<-readAll(brick(Itho_ring_proba_stack))
+# 
+# 
+# Itho_OMU_proba_stack <- readAll(projectRaster(from=brick("../Ithomiini/All_OMU_proba.grd"), crs = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"), method="bilinear"))
+# 
+# Itho_ring_proba_stack <- readAll(projectRaster(from=Itho_ring_proba_stack, crs = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"), method="bilinear"))
+# 
+# Itho_ring_proba_stack<-readAll(resample(Itho_ring_proba_stack, Helico_ring_proba_stack[[1]]))
+# 
+# saveRDS(Itho_OMU_proba_stack, file="../input_data/Species_data/Itho_OMU_proba_stack.rds")
+# 
+# Itho_OMU_proba_stack<-readAll(resample(readRDS("../input_data/Species_data/Itho_OMU_proba_stack.rds"), Helico_ring_proba_stack[[1]]))
+# 
+# saveRDS(Itho_OMU_proba_stack, file="../input_data/Species_data/Itho_OMU_proba_stack.rds")
+# 
+# saveRDS(Itho_ring_proba_stack, file="../input_data/Species_data/Itho_ring_proba_stack.rds")
+
+Itho_ring_proba_stack<- readRDS("../input_data/Species_data/Itho_ring_proba_stack.rds")
+ 
+Itho_OMU_proba_stack<- readRDS("../input_data/Species_data/Itho_OMU_proba_stack.rds")
+
+
+#####Merge rings maps
+for(i in 1:nlayers(Itho_ring_proba_stack))
+{
+  names(Itho_ring_proba_stack)[i]<- paste0(names(Itho_ring_proba_stack)[i],".ITHO")
+}
+
+for(i in 1:nlayers(Helico_ring_proba_stack))
+{
+  names(Helico_ring_proba_stack)[i]<- paste0(names(Helico_ring_proba_stack)[i],".HELICO")
+}
+
+
+HeIt_ring_proba_stack<-NA
+HeIt_ring_proba_stack<-stack(Helico_ring_proba_stack,Itho_ring_proba_stack)
+
+rm(Helico_ring_proba_stack)
+rm(Itho_ring_proba_stack)
+
+saveRDS(HeIt_ring_proba_stack, paste0("../input_data/Species_data/HeIt_ring_proba_stack_",m,".RDS"))
+
+#####Merge OMU maps
+
+HeIt_OMU_proba_stack<-NA
+HeIt_OMU_proba_stack<-stack(Helico_OMU_proba_stack,Itho_OMU_proba_stack)
+
+rm(Helico_OMU_proba_stack)
+rm(Itho_OMU_proba_stack)
+
+saveRDS(HeIt_OMU_proba_stack, "../input_data/Species_data/HeIt_OMU_proba_stack_",m,".RDS")
+
+### 2/ Generate matrix communities * OMU for probabilities of presence ####
+unit<-c("ring", "OMU")
+
+  for (l in 1:length(unit)){
+
+    unit1<-unit[l]
+
+    object_name<-paste0("HeIt_",unit1,"_proba_stack")
+    temp_stack<-get(object_name)
+
+proba_brick <- (temp_stack*1)
+com_unit_mat <- NA
+for (i in 1:nlayers(proba_brick))
+{
+  if (i==1){
+    com_unit_mat <- temp_stack[[i]]@data@values
+  }else{
+    unit.values <- temp_stack[[i]]@data@values
+    com_unit_mat<- cbind(com_unit_mat, unit.values)
+  }
+  if (i %% 10 == 0) {print(i)}
+}
+colnames(com_unit_mat) <- names(temp_stack)
+rm(temp_stack)
+output_name<-paste0("HeIt_com_",unit1,"_mat")
+
+saveRDS(com_unit_mat, file =paste0( "../input_data/",output_name,"_",m,".rds"))
+
+  }
+
+HeIt_OMU_mat<-readRDS(file = paste0("../input_data/HeIt_com_OMU_mat_",m,".rds"))
+HeIt_ring_mat<-readRDS(file =paste0("../input_data/HeIt_com_ring_mat_",m,".rds"))
+
+
+
+mimicry.list <- names(HeIt_ring_proba_stack)
+
+
+
+Itho_OMU_proba_stack<-readRDS("../input_data/Species_data/Itho_OMU_proba_stack.RDS")
+
+list_type<-as.data.frame(names(Itho_OMU_proba_stack))
+rm(Itho_OMU_proba_stack)
+colnames(list_type)<-"biomodTag"
+
+list_type$Ring<-NA
+for(l in 1:length(list_type$biomodTag))
+{
+  list_type$Ring[l]<-str_split_fixed(list_type$biomodTag[l], "[.]", n=3)[3]
+  list_type$Ring[l]<-paste0(list_type$Ring[l],".ITHO")
+}
+
+
+
+for(l in 1:length(list_OMU$OMU))
+{
+  list_OMU$Mimicry_ring[l]<-str_split_fixed(list_OMU$OMU[l], "[.]", n=3)[3]
+  list_OMU$Mimicry_ring[l]<-paste0(list_OMU$Mimicry_ring[l],".HELICO")
+}
+
+###Merge OMU list
+names(list_OMU)<-c("biomodTag", "Ring", "phenotypic_rarity", "OMU2")
+list_OMU_HeIt <-rbind(list_OMU[,c(1,2)], list_type)
+list_OMU_HeIt$ring_simple<-str_split_fixed(list_OMU_HeIt$Ring, "[.]HELICO|[.]ITHO", n=2)
+list_OMU_HeIt$tribe<-str_extract(list_OMU_HeIt$Ring, "HELICO|ITHO")
+saveRDS(list_OMU_HeIt, "../input_data/Species_data/list_OMU_HeIt_",m,".RDS")
+
+
+# Filter out communities with NA
+
+
+  for (j in 1:length(unit)){
+   
+    unit1<-unit[j]
+
+    object_name<-paste0("HeIt_",unit1,"_mat")
+    com_unit_mat<-get(object_name)
+
+    real_com_index <- NA
+  mod=com_unit_mat
+
+for (i in 1:nrow(mod)) 
+{
+  com.row <- mod[i,]
+  real_com_index[i] <- (!any(is.na(com.row)))&(!any(is.nan(com.row)))
+}
+Filtered_com <- mod[real_com_index,]
+nrow(Filtered_com) 
+
+saveRDS(Filtered_com, file = paste0("../input_data/SDM_stacks/Filtered",object_name,"_",m,".rds"))
+rm(Filtered_com)
+
+}
+
+
+# Load directly the matrix of community * units probability presence
+HeIt_ring_mat <- readRDS(file = "../input_data/SDM_stacks/FilteredHeIt_ring_mat_",m,".rds")
+
+HeIt_OMU_mat <- readRDS(file = "../input_data/SDM_stacks/FilteredHeIt_OMU_mat_",m,".rds")
+
+### 3/ Compute Bray-Curtis indices ####
+
+
+
+## 3.1/ Compute Bray-Curtis index for all pairs of units ####
+
+
+  for (j in 1:length(unit)){
+   
+    unit1<-unit[j]
+
+    object_name<-paste0("HeIt_",unit1,"_mat")
+    stack_name<-paste0("HeIt_",unit1)
+    com_unit_mat<-get(object_name)
+    
+  mod=com_unit_mat
+  modname=object_name
+
+
+dim(mod)
+unit_BC_dist <- vegdist(x = t(mod), method = "bray",na.rm=T) # Compute dissimilarities between rows
+
+saveRDS(unit_BC_dist, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/",modname,"_BC_dist_",m,".rds"))
+save(unit_BC_dist, file =paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/",modname,"_BC_dist_",m,".RData"))
+
+# Load directly the vector of BC distances among all units
+unit_BC_dist <- readRDS(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/",modname,"_BC_dist_",m,".rds"))
+unit_proba_stack <- readRDS(file = paste0("../input_data/Species_data/",stack_name,"_proba_stack_",m,".RDS"))
+
+
+unit_BC_dist_mat <- as.matrix(unit_BC_dist)
+
+####Stop here for mimicry ring analysis only
+
+if(unit1=="ring")
+{
+  HeIt_ring_cooc_df<-as.data.frame("Ring_1")
+  HeIt_ring_cooc_df$Ring_2<-NA
+  HeIt_ring_cooc_df$BC<-NA
+
+p<-0
+for (o in 1:ncol(unit_BC_dist_mat))
+{
+  for (n in 1:nrow(unit_BC_dist_mat))
+    {
+    p<-p+1
+    HeIt_ring_cooc_df[m,3]<-unit_BC_dist_mat[n,o]
+    HeIt_ring_cooc_df[m,1]<-colnames(unit_BC_dist_mat)[o]
+    HeIt_ring_cooc_df[m,2]<-rownames(unit_BC_dist_mat)[n]
+    
+    if(p %% 50==0)
+    {print(p)}
+  }
+}
+  HeIt_ring_cooc_df$Delete<-NA
+  HeIt_ring_cooc_df$Delete[1:nrow(HeIt_ring_cooc_df)]<-FALSE
+  
+for (q in 1:nrow(HeIt_ring_cooc_df)){
+  if(HeIt_ring_cooc_df$`"Ring_1"`[q]==HeIt_ring_cooc_df$Ring_2[q])
+  {
+    HeIt_ring_cooc_df$Delete[q]<-TRUE
+  }
+  
+  for(g in 1:nrow(HeIt_ring_cooc_df)){
+  
+  if(HeIt_ring_cooc_df$`"Ring_1"`[q]==HeIt_ring_cooc_df$Ring_2[g]
+     && HeIt_ring_cooc_df$Ring_2[q]==HeIt_ring_cooc_df$`"Ring_1"`[g] && HeIt_ring_cooc_df$Delete[q]!=TRUE)
+  {HeIt_ring_cooc_df$Delete[g]<-TRUE}
+  } 
+}
+    
+
+  HeIt_ring_cooc_df <- HeIt_ring_cooc_df[HeIt_ring_cooc_df$Delete==FALSE,1:3] %>%
+    arrange(BC)
+  saveRDS(HeIt_ring_cooc_df, "../input_data/Species_data/HeIt_ring_cooc_df_",m,".RDS")
+  
+  
+  
+}
+
+
+### 3.2/ Compute mean BC per mimicry rings ####
+if(unit1=="OMU"){
+mean_BC <- NA
+mean_BCHI <- NA
+for (i in 1:length(mimicry.list)) # Per mimicry rings
+{
+  ring <- mimicry.list[i]
+
+if(unit1=="OMU"){
+  # Get names and indices of all units/OMUs for this ring
+  tags <- as.character(list_OMU_HeIt$biomodTag[list_OMU_HeIt$Ring == ring]) # Get names of all OMUs in the ring
+
+
+  index <- which(names(HeIt_OMU_proba_stack) %in% tags) 
+  # Get index of layer for these OMUs
+}
+
+
+  if (length(tags) == 1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+  {
+    mat.index <- data.frame(matrix(nrow = 2, ncol = 0))
+    # Empty df of pairs indices (no pairs of OMUs)
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.",ring,"_",object_name,".RData"))
+    BC <- c() # Empty vector of Bray-Curtis values
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC.",ring,"_",object_name,".RData"))
+    mean_BC[i] <- NA
+
+  } else { # Case with at least 2 OMUs.
+    mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.",ring,"_",object_name,".RData"))
+
+    BC <- c(rep(1, ncol(mat.index))) # Initiate the vector used to store all BC values
+    for (j in 1:ncol(mat.index)) # For each pair of OMUs
+    {
+      BC[j] <- unit_BC_dist_mat[mat.index[1,j], mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+    }
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC.",ring,"_",object_name,".RData")) # Save the vector of BC for all pairs of OMUs in this ring
+    mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+  }
+
+  cat(paste0(Sys.time(), " - ", ring," - n°",i, " on ",length(mimicry.list),"\n"))
+
+}
+
+COMIM_rings<-readxl::read_xlsx("../Ithomiini/COMIM_rings.xlsx")
+
+for (i in 1:nrow(COMIM_rings)) # Per common mimicry rings
+{
+  ringH <- COMIM_rings$RINGH[i]
+  ringI <- COMIM_rings$RINGI[i]
+  
+
+  
+if(unit1=="OMU"){
+  # Get names and indices of all units/OMUs for this ring
+  tags <- as.character(list_OMU_HeIt$biomodTag[list_OMU_HeIt$Ring == ringH|list_OMU_HeIt$Ring == ringI]) # Get names of all OMUs in the ring
+
+  index <- which(names(HeIt_OMU_proba_stack) %in% tags) 
+  # Get index of layer for these OMUs
+}
+
+
+  if (length(tags) == 1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+  {
+    mat.index <- data.frame(matrix(nrow = 2, ncol = 0))
+    # Empty df of pairs indices (no pairs of OMUs)
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.HI.",ringI,"_",object_name,".RData"))
+    BC <- c() # Empty vector of Bray-Curtis values
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC.HI.",ringI,"_",object_name,".RData"))
+    mean_BC[i] <- NA
+
+  } else { # Case with at least 2 OMUs.
+    
+    
+    mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    
+    #delete pairs which are not Itho VS Helico
+    todelete<-c()
+    p=0
+for(w in 1:ncol(mat.index))    
+    if( list_OMU_HeIt$tribe[mat.index[1,w]]=="HELICO"&list_OMU_HeIt$tribe[mat.index[2,w]]=="HELICO" ||
+        list_OMU_HeIt$tribe[mat.index[1,w]]=="ITHO"&list_OMU_HeIt$tribe[mat.index[2,w]]=="ITHO")
+    {p=p+1
+    todelete[p]<-w}
+    
+    mat.index=subset(mat.index, select=-todelete)
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.HI",ringI,"_",object_name,".RData"))
+
+    BC <- c(rep(1, ncol(mat.index))) # Initiate the vector used to store all BC values
+    for (j in 1:ncol(mat.index)) # For each pair of OMUs
+    {
+      BC[j] <- unit_BC_dist_mat[mat.index[1,j], mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+    }
+    save(BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC.HI",ringI,"_",object_name,".RData")) # Save the vector of BC for all pairs of OMUs in this ring
+    mean_BCHI[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+  }
+
+  cat(paste0(Sys.time(), " - ", ringI," - n°",i, " on ",length(mimicry.list),"\n"))
+
+}
+
+names(mean_BC) <- mimicry.list # Associate mean BC value with ring name
+save(mean_BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mean_BC_",object_name,".RData")) # Save final vector with mean BC values per ring
+saveRDS(mean_BC, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mean_BC_",object_name,".rds")) # Save final vector with mean BC values per ring
+
+names(mean_BCHI) <- paste0(str_split_fixed(COMIM_rings$RINGI, "[.]ITHO", n=2)[,1],".BOTH") # Associate mean BC value with ring name
+save(mean_BCHI, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mean_BC_HI",object_name,".RData")) # Save final vector with mean BC values per ring
+saveRDS(mean_BCHI, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mean_BC_HI",object_name,".rds"))
+
+# Load mean BC of mimicry rings
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mean_BC_",object_name,".RData"))
+mean_BC
+
+   
+}
+}
+```
+
+
+```{r}
+## 3.3/ Compute mean BC for all comimics, all rings taken into account ####
+
+COMIM_rings$ring_simple<- str_split_fixed(COMIM_rings$RINGH, "[.]", n=2)[,1]
+
+mimicry.list_HI<- unique (str_split_fixed( mimicry.list, pattern=("[.]HELICO"), n=3))[,1]
+mimicry.list_HI<- unique (str_split_fixed( mimicry.list_HI, pattern=("[.]ITHO"), n=3))[,1]
+#Retrieve all co-mimic coordinates
+pos_ELZ<-match("ELZUNIA", mimicry.list_HI)
+mimicry.list_HI<-mimicry.list_HI[-pos_ELZ]
+#delete ELZUNIA bc already comim with pavonii and humboldt
+
+all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow=2)) # Generate empty df to store indices of pairs of comimics
+for (i in 1:length(mimicry.list_HI))  # Per mimetic ring
+{
+  ring <- mimicry.list_HI[i]
+ 
+  
+   if(is.na(match(ring , COMIM_rings$ring_simple))==TRUE)
+  {
+    ring<-list_OMU_HeIt$Ring[list_OMU_HeIt$ring_simple==ring][1]
+    
+  load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.",ring,"_",object_name,".RData")) # Load the matrix of indices of pairsof comimics for this ring
+  all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+   }
+  
+   
+  if(is.na(match(ring , COMIM_rings$ring_simple))==FALSE)
+  {
+    ring<-list_OMU_HeIt$Ring[list_OMU_HeIt$ring_simple==ring][ncol(list_OMU_HeIt$ring_simple==ring)]
+  
+    
+  load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/mat.index.HI",ring,"_",object_name,".RData")) # Load the matrix of indices of pairsof comimics for this ring
+  all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+
+
+dim(all_mimic_mat_index) # 14 659 pairs of co-mimic OMUs
+
+save(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/all_mimic_mat_index_",object_name,".RData"))
+saveRDS(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/all_mimic_mat_index_",object_name,".rds"))
+
+# Retrieve all co-mimic BC values and non-co-mimic BC values at the same time
+BC_mimic <- NA # Initiate final vector to store BC values for comimics
+unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+for (j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+{
+  BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+  unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  if (j %% 1000 == 0) {print(j)}
+}
+length(BC_mimic) # 14 659 pairs of co-mimic OMUs
+
+save(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".RData")) # Save final vector with all BC values for comimics
+saveRDS(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".rds")) # Save final vector with all BC values for comimics
+
+# Retrieve all non-mimic BC values
+BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+length(BC_no_mimic) # 291 494 pairs of non-mimic units
+
+save(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".RData")) # Save final vector with all BC values for non-comimics
+saveRDS(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".rds")) # Save final vector with all BC values for non-comimics
+
+
+# Compute mean obs BC for each group
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/",object_name,"_BC_dist.RData")) # All BC index (distance format)
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".RData")) # Only mimic pairs (vector format)
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".RData")) # Only non mimic pairs (vector format)
+
+Global_mean_BC <- mean(unit_BC_dist) ; Global_mean_BC # 0.949
+Global_mimic_mean_BC <- mean(BC_mimic) ; Global_mimic_mean_BC # 0.706
+Global_no.mimic_mean_BC <- mean(BC_no_mimic) ; Global_no.mimic_mean_BC # 0.952
+
+# Save all mean BC values for all pairs, only co-mimics, only non-comimics
+save(Global_mean_BC, Global_mimic_mean_BC, Global_no.mimic_mean_BC, file =paste0( "../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/All_Global_BC_",object_name,".RData"))
+
+}
+
+
+```
+
+
+```{r}
+#plot BC Itho VS Helico VS both
+Hel_Ith_Both<-data.frame(x=rep(NA,8),y=rep(NA,8),z=rep(NA,8))
+names(Hel_Ith_Both)<-c("HELICO","ITHO","BOTH")
+for(i in 1:nrow(COMIM_rings))
+{
+  Hel_Ith_Both$HELICO[i]<-as.numeric(mean_BC[COMIM_rings$RINGH[i]])
+  Hel_Ith_Both$ITHO[i]<-as.numeric(mean_BC[COMIM_rings$RINGI[i]])
+  Hel_Ith_Both$BOTH[i]<-as.numeric(mean_BCHI[i])
+}
+row.names(Hel_Ith_Both)<-str_split_fixed(COMIM_rings$RINGI, "[.]", n=2)[,1]
+
+# # h<-0
+# # Hel_Ith_Both_df<-data.frame(x=rep(NA,24),y=rep(NA,24),z=rep(NA,24))
+# # names(Hel_Ith_Both_df)<-c("TRIBE", "RING", "BC")
+# #   for(i in 1:ncol(Hel_Ith_Both))
+# #   { for(j in 1:nrow(Hel_Ith_Both))
+# #   {
+# #     h<-h+1
+# #     Hel_Ith_Both_df[h,1]<-colnames(Hel_Ith_Both)[i]
+# #     Hel_Ith_Both_df[h,2]<-rownames(Hel_Ith_Both)[j]
+# #     Hel_Ith_Both_df[h,3]<-Hel_Ith_Both[j,i]
+# #   }}
+# # Hel_Ith_Both_df$TRIBE<-as.factor(Hel_Ith_Both_df$TRIBE)
+# # Hel_Ith_Both_df$RING<-as.factor(Hel_Ith_Both_df$RING)
+# 
+# 
+# pdf(file = paste0("../outputs/Community_Structure/BARPLOT_BC_HeItBo.pdf"), height = 7, width = 8)
+# barplot(height=t(as.matrix(Hel_Ith_Both)), ylab = "Bray-Curtis index", cex.main=1.2,main = "Bray-Curtis indices for mimics of each common ring in \nHeliconiine, Ithomiine and between both tribes", col = c("orange", "yellow", "red"), beside = TRUE,
+#         cex.axis=1, cex.names=0.78)
+# legend(24,0.95,        # Add legend to plot
+#        legend =rownames(t(as.matrix(Hel_Ith_Both))) ,
+#        col = c("orange", "yellow", "red"),
+#        pch = 16,
+#        cex = 1)
+# 
+# dev.off()
+```
+
+
+```{r}
+
+COMIM_rings <- read_excel("Ithomiini/COMIM_rings.xlsx")
+COMIM_rings$ref<-NA
+for(i in 1: nrow(COMIM_rings))
+{
+  for (j in 1:nrow(HeIt_ring_cooc_df))
+  {
+    if((COMIM_rings$RINGH[i]==HeIt_ring_cooc_df[j,1]||COMIM_rings$RINGH[i]==HeIt_ring_cooc_df[j,2]) 
+       &&   (COMIM_rings$RINGI[i]==HeIt_ring_cooc_df[j,2]||COMIM_rings$RINGI[i]==HeIt_ring_cooc_df[j,1]))
+    {COMIM_rings$ref[i]<-j}
+  }
+}
+COMIM_rings$label_ring<-str_split_fixed(COMIM_rings$RINGI, "[.]", n=2)
+pos.seq<-c(900,870,840,810,780,750,720,660)
+
+
+
+pdf(file = paste0("../outputs/Community_Structure/hist_BC_rings_HeIt.pdf"), height = 6.3, width = 6.5)
+hist(HeIt_ring_cooc_df$BC, xlab = "Bray-Curtis index", main = "Bray-Curtis indices of mimicry ring dissimilarity of distributions")
+
+for (i in 1:nrow(COMIM_rings))
+{
+abline(v = HeIt_ring_cooc_df$BC[COMIM_rings$ref[i]], col = "red", lty = 2, lwd = 2)
+text(x=HeIt_ring_cooc_df$BC[COMIM_rings$ref[i]], y=pos.seq[i], col="red", labels=paste0(COMIM_rings$label_ring[i] ), cex=0.8) 
+text(x=HeIt_ring_cooc_df$BC[COMIM_rings$ref[i]], y=(pos.seq[i]-35), col="red",
+     labels=
+       round( (COMIM_rings$ref[i]/nrow(HeIt_ring_cooc_df))*100, 1) , cex=0.8) 
+}
+
+legend(legend = c(paste0("Mean = ", round(mean(HeIt_ring_cooc_df$BC, na.rm = T),3)), 
+                  paste0("CI 5% = ", round(quantile(HeIt_ring_cooc_df$BC, 0.05),3)),
+                  paste0("CI 95% = ", round(quantile(HeIt_ring_cooc_df$BC, 0.95),3))),
+       x = "topleft", cex = 1, bty ="n") 
+dev.off()
+```
+
+
+
+
+```{r}
+###Only Itho vs Helico rings
+
+object_name<-"HeIt_OMU_mat"
+COMIM_rings$ring_simple_ITHO<-str_replace_all(COMIM_rings$RINGI, ".ITHO", "")
+
+mimicry.list.COMIM_HI <- mimicry.list_HI[ 
+  match(COMIM_rings$ring_simple_ITHO,
+        mimicry.list_HI
+        )]
+
+
+
+# Retrieve all co-mimic BC values 
+
+BC_mimic_HI <- NA # Initiate final vector to store BC values for comimics
+unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+for (j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+{
+  BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+  unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  if (j %% 1000 == 0) {print(j)}
+}
+length(BC_mimic) # 11 991 pairs of co-mimic OMUs
+
+save(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".RData")) # Save final vector with all BC values for comimics
+saveRDS(BC_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".rds")) # Save final vector with all BC values for comimics
+
+# Retrieve all non-mimic BC values
+BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+length(BC_no_mimic) # 291 494 pairs of non-mimic units
+
+save(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".RData")) # Save final vector with all BC values for non-comimics
+saveRDS(BC_no_mimic, file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".rds")) # Save final vector with all BC values for non-comimics
+
+
+# Compute mean obs BC for each group
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/",object_name,"_BC_dist.RData")) # All BC index (distance format)
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_",object_name,".RData")) # Only mimic pairs (vector format)
+load(file = paste0("../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_no_mimic_",object_name,".RData")) # Only non mimic pairs (vector format)
+
+Global_mean_BC <- mean(unit_BC_dist) ; Global_mean_BC # 0.949
+Global_mimic_mean_BC <- mean(BC_mimic) ; Global_mimic_mean_BC # 0.706
+Global_no.mimic_mean_BC <- mean(BC_no_mimic) ; Global_no.mimic_mean_BC # 0.952
+
+# Save all mean BC values for all pairs, only co-mimics, only non-comimics
+save(Global_mean_BC, Global_mimic_mean_BC, Global_no.mimic_mean_BC, file =paste0( "../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/All_Global_BC_",object_name,".RData"))
+
+
+
+
+
+
+```
+
+```{r}
+#Table to stock BC values
+tic("start")
+#list_OMU_HeIt$ring_simple<-list_OMU_HeIt$ring_simple[,1]
+mimicry.list_HI<-unique(list_OMU_HeIt$ring_simple)
+
+BC_summary_table<-data.frame(Comim_Itho=c(0,0,0), Comim_Helico=c(0,0,0), Comim_Inter=c(0,0,0), Comim_All=c(0,0,0))
+rownames(BC_summary_table)<-c("BC_obs", "BC_permu", "pvalue")
+list_OMU_HeIt$ring_simple<-list_OMU_HeIt$ring_simple[,1] #was considered as a df
+
+##Itho
+tic("Itho")
+
+ ###BC OBS
+Itho_BC_vec<-c()
+vec_counter<-0
+list_OMU_Itho<-list_OMU_HeIt[list_OMU_HeIt$tribe=="ITHO",]
+
+p<-progress_estimated(nrow(list_OMU_Itho), min_time=10)
+
+for (i in 1:nrow(list_OMU_Itho))
+{
+  p$pause(0.1)$tick()$print()
+  for(j in 1:nrow(list_OMU_Itho))
+  {
+    if(list_OMU_Itho$biomodTag[i]!=list_OMU_Itho$biomodTag[j] && list_OMU_Itho$Ring[i]==list_OMU_Itho$Ring[j])
+    {
+      ref_1<-as.numeric(rownames(list_OMU_Itho[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_Itho[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Itho_BC_vec[vec_counter]<-BC_ref
+    }    
+  }
+}
+BC_summary_table$Comim_Itho[1]<-mean(Itho_BC_vec)
+
+  ###PERMUTATIONS
+mimicry.list<-unique(list_OMU_Itho$Ring)
+## Start the loop for permutations
+BC_mimic_null <- BC_no_mimic_null <- NA # Create vectors to store simulated mean BC values for co-mimics and non-comimics
+mean_BC_null <- matrix(ncol = length(mimicry.list), nrow = 0) # Create matrix to store mean simulated BC values for each mimicry ring for each simulation
+
+p<-progress_estimated(999, min_time=10)
+
+
+for (k in 1:999) # 999 simulations/permutations
+{ 
+  p$pause(0.1)$tick()$print()
+  # k <- 1
+  ## Suffle mimicry ring among units
+  shuffle.list.unit <- list_OMU_Itho
+  shuffle.list.unit$Ring <- sample(as.character(shuffle.list.unit$Ring))
+  
+  # # Check if number of unit per ring is preserved
+  # table(list.unit$Mimicry.model)
+  # table(shuffle.list.unit$Mimicry.model)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+  mimicry.list <- as.character(unique(list_OMU_Itho$Ring)) # 44 Mimicry rings
+  
+  mean_BC <- NA
+  for (i in 1:length(mimicry.list)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_Itho$biomodTag[shuffle.list.unit$Ring == ring])
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_IT.RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_BC[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_IT.RData")) # Save temp mat indices df to be used later to merge for all rings
+      BC <- NA # Initiate the vector used to store all BC values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        BC[j] <- unit_BC_dist_mat[mat.index[1,j],mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+      }
+      mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_BC) <- mimicry.list
+  mean_BC_null <- rbind(mean_BC_null,mean_BC) # Store the mean BC vector into the matrix of simulations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list)) { # Per mimicry rings
+    ring <- mimicry.list[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_IT.RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) # 14 659 pairs of mimic units
+  
+  # Retrieve all mimic values and non-co-mimic BC values at the same time
+  BC_mimic <- NA # Initiate final vector to store BC values for comimics
+  unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+    unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  }
+  # length(BC_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+  # length(BC_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  BC_mimic_null[k] <- mean(BC_mimic)
+  BC_no_mimic_null[k] <- mean(BC_no_mimic)
+  
+  cat(paste0(Sys.time(), " - Simul n°", k," out of 1000\n"))
+  save(mean_BC_null, BC_mimic_null, BC_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_IT.RData"))
+}
+
+summary(mean_BC_null)     # Per mimicry ring
+summary(BC_mimic_null)    # For all comimic pairs
+summary(BC_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+BC_summary_table$Comim_Itho[2]<-mean(BC_mimic_null) #BC under null hypothesis
+
+for(i in 1:length(BC_mimic_null))
+{
+  if(BC_summary_table$Comim_Itho[1]<rank(BC_mimic_null)[i])
+  {
+    BC_summary_table$Comim_Itho[3]<-1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && BC_summary_table$Comim_Itho[1]<rank(BC_mimic_null)[i+1] && BC_summary_table$Comim_Itho[1]>rank(BC_mimic_null)[i-1])
+  {
+    BC_summary_table$Comim_Itho[3]<-1/i #pvalue
+    break
+  }
+}
+toc()
+
+##Helico
+
+tic("Helico")
+
+Helico_BC_vec<-c()
+vec_counter<-0
+list_OMU_Helico<-list_OMU_HeIt[list_OMU_HeIt$tribe=="HELICO",]
+
+p<-progress_estimated(nrow(list_OMU_Helico), min_time=10)
+
+for (i in 1:nrow(list_OMU_Helico))
+{
+  p$pause(0.1)$tick()$print()
+  for(j in 1:nrow(list_OMU_Helico))
+  {
+    if(i!=j && list_OMU_Helico$Ring[i]==list_OMU_Helico$Ring[j])
+    {
+      ref_1<-as.numeric(rownames(list_OMU_Helico[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_Helico[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Helico_BC_vec[vec_counter]<-BC_ref
+    }    
+  }
+}
+BC_summary_table$Comim_Helico[1]<-mean(Helico_BC_vec)
+
+  ###PERMUTATIONS
+mimicry.list<-unique(list_OMU_Helico$Ring)
+## Start the loop for permutations
+BC_mimic_null <- BC_no_mimic_null <- NA # Create vectors to store simulated mean BC values for co-mimics and non-comimics
+mean_BC_null <- matrix(ncol = length(mimicry.list), nrow = 0) # Create matrix to store mean simulated BC values for each mimicry ring for each simulation
+
+p<-progress_estimated(999, min_time=10)
+
+
+for (k in 1:999) # 999 simulations/permutations
+{ 
+  p$pause(0.1)$tick()$print()
+  # k <- 1
+  ## Suffle mimicry ring among units
+  shuffle.list.unit <- list_OMU_Helico
+  shuffle.list.unit$Ring <- sample(as.character(shuffle.list.unit$Ring))
+  
+  # # Check if number of unit per ring is preserved
+  # table(list.unit$Mimicry.model)
+  # table(shuffle.list.unit$Mimicry.model)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+  mimicry.list <- as.character(unique(list_OMU_Helico$Ring)) # 44 Mimicry rings
+  
+  mean_BC <- NA
+  for (i in 1:length(mimicry.list)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_Helico$biomodTag[shuffle.list.unit$Ring == ring])
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HE.RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_BC[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HE.RData")) # Save temp mat indices df to be used later to merge for all rings
+      BC <- NA # Initiate the vector used to store all BC values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        BC[j] <- unit_BC_dist_mat[mat.index[1,j],mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+      }
+      mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_BC) <- mimicry.list
+  mean_BC_null <- rbind(mean_BC_null,mean_BC) # Store the mean BC vector into the matrix of simulations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list)) { # Per mimicry rings
+    ring <- mimicry.list[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HE.RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) # 14 659 pairs of mimic units
+  
+  # Retrieve all mimic values and non-co-mimic BC values at the same time
+  BC_mimic <- NA # Initiate final vector to store BC values for comimics
+  unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+    unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  }
+  # length(BC_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+  # length(BC_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  BC_mimic_null[k] <- mean(BC_mimic)
+  BC_no_mimic_null[k] <- mean(BC_no_mimic)
+  
+  cat(paste0(Sys.time(), " - Simul n°", k," out of 1000\n"))
+  save(mean_BC_null, BC_mimic_null, BC_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_HE.RData"))
+}
+
+summary(mean_BC_null)     # Per mimicry ring
+summary(BC_mimic_null)    # For all comimic pairs
+summary(BC_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+BC_summary_table$Comim_Helico[2]<-mean(BC_mimic_null) #BC under null hypothesis
+
+for(i in 1:length(BC_mimic_null))
+{
+  if(BC_summary_table$Comim_Helico[1]<rank(BC_mimic_null)[i])
+  {
+    BC_summary_table$Comim_Helico[3]<-1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && BC_summary_table$Comim_Helico[1]<rank(BC_mimic_null)[i+1] && BC_summary_table$Comim_Helico[1]>rank(BC_mimic_null)[i-1])
+  {
+    BC_summary_table$Comim_Helico[3]<-1/i #pvalue
+    break
+  }
+}
+toc()
+# ##Inter
+tic("Inter")
+
+Inter_BC_vec<-c()
+vec_counter<-0
+
+p<-progress_estimated(nrow(list_OMU_HeIt), min_time=10)
+
+for (i in 1:nrow(list_OMU_HeIt))
+{
+  p$pause(0.1)$tick()$print()
+  for(j in 1:nrow(list_OMU_HeIt))
+  {
+    if(list_OMU_HeIt$ring_simple[i]=="ELZUNIA") #to not repeat
+    {next}
+    if(list_OMU_HeIt$ring_simple[i]==list_OMU_HeIt$ring_simple[j] && list_OMU_HeIt$tribe[i]!=list_OMU_HeIt$tribe[j])
+    {
+      
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Inter_BC_vec[vec_counter]<-BC_ref
+    } 
+    if(list_OMU_HeIt$ring_simple[i]=="PAVONII" | list_OMU_HeIt$ring_simple[i]=="HUMBOLDT")  #particular case of ELZUNIA comim with 2 ITHO rings
+    {
+      if( list_OMU_HeIt$ring_simple[j]=="ELZUNIA")
+      {
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter
+      Inter_BC_vec[vec_counter]<-BC_ref
+      }
+    }
+  }
+}
+BC_summary_table$Comim_Inter[1]<-mean(Inter_BC_vec)
+
+###PERMUTATIONS
+## Start the loop for permutations
+BC_mimic_null <- BC_no_mimic_null <- NA # Create vectors to store simulated mean BC values for co-mimics and non-comimics
+mean_BC_null <- matrix(ncol = length(mimicry.list.COMIM_HI), nrow = 0) # Create matrix to store mean simulated BC values for each mimicry ring for each simulation
+
+
+p<-progress_estimated(999, min_time=10)
+
+for (k in 1:999) # 999 simulations/permutations
+{ 
+  p$pause(0.1)$tick()$print()
+  # k <- 1
+  ## Suffle mimicry ring among units
+
+  shuffle.list.unit <- list_OMU_HeIt
+  shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="HELICO"] <- sample(as.character(shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="HELICO"])) #shuffle for Heliconiini
+  shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="ITHO"] <- sample(as.character(shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="ITHO"])) #shuffle for Heliconiini
+  
+  # # Check if number of unit per ring is preserved
+  # table(list.unit$Mimicry.model)
+  # table(shuffle.list.unit$Mimicry.model)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+
+  
+  mean_BC <- NA
+  for (i in 1:length(mimicry.list.COMIM_HI)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list.COMIM_HI[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_HeIt$biomodTag[shuffle.list.unit$ring_simple == ring])
+    
+    if (ring=="PAVONII"|ring=="HUMBOLDT") #specific case of ELZUNIA, comim for two rings
+    {
+      tags2<-as.character(list_OMU_HeIt$biomodTag[shuffle.list.unit$ring_simple == "ELZUNIA"])
+    tags<-c(tags,tags2)
+    }
+    
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HEIT.RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_BC[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HEIT.RData")) # Save temp mat indices df to be used later to merge for all rings
+      BC <- NA # Initiate the vector used to store all BC values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        BC[j] <- unit_BC_dist_mat[mat.index[1,j],mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+      }
+      mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_BC) <- mimicry.list.COMIM_HI
+  mean_BC_null <- rbind(mean_BC_null,mean_BC) # Store the mean BC vector into the matrix of simulations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list.COMIM_HI)) { # Per mimicry rings
+    ring <- mimicry.list.COMIM_HI[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_HEIT.RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) 
+  
+  # Retrieve all mimic values and non-co-mimic BC values at the same time
+  BC_mimic <- NA # Initiate final vector to store BC values for comimics
+  unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+    unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  }
+  # length(BC_mimic) 
+  
+  # Retrieve all non-mimic values
+  BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+  # length(BC_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  BC_mimic_null[k] <- mean(BC_mimic)
+  BC_no_mimic_null[k] <- mean(BC_no_mimic)
+  
+  cat(paste0(Sys.time(), " - Simul n°", k," out of 1000\n"))
+  save(mean_BC_null, BC_mimic_null, BC_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_HEIT.RData"))
+}
+
+summary(mean_BC_null)     # Per mimicry ring
+summary(BC_mimic_null)# For all comimic pairs
+summary(BC_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+BC_summary_table$Comim_Inter[2]<-mean(BC_mimic_null) #BC under null hypothesis
+
+for(i in 1:length(BC_mimic_null))
+{
+  if(BC_summary_table$Comim_Inter[1]<rank(BC_mimic_null)[i])
+  {
+    BC_summary_table$Comim_Inter[3]<-1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && BC_summary_table$Comim_Inter[1]<rank(BC_mimic_null)[i+1] && BC_summary_table$Comim_Inter[1]>rank(BC_mimic_null)[i-1])
+  {
+    BC_summary_table$Comim_Inter[3]<-1/i #pvalue
+    break
+  }
+}
+toc()
+##All comims
+tic("All")
+
+All_BC_vec<-c()
+vec_counter<-0
+
+
+p<-progress_estimated(nrow(list_OMU_HeIt), min_time=10)
+
+for (i in 1:nrow(list_OMU_HeIt))
+{
+  p$pause(0.1)$tick()$print()
+  for(j in 1:nrow(list_OMU_HeIt))
+  {
+    if(list_OMU_HeIt$ring_simple[i]=="ELZUNIA") #to not repeat
+    {next}
+    if(list_OMU_HeIt$ring_simple[i]==list_OMU_HeIt$ring_simple[j] && list_OMU_HeIt$biomodTag[i]!=list_OMU_HeIt$biomodTag[j])
+    {
+      
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      All_BC_vec[vec_counter]<-BC_ref
+    } 
+    if(list_OMU_HeIt$ring_simple[i]=="PAVONII" | list_OMU_HeIt$ring_simple[i]=="HUMBOLDT")  #particular case of ELZUNIA comim with 2 ITHO rings
+    {
+      if( list_OMU_HeIt$ring_simple[j]=="ELZUNIA")
+      {
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter
+      All_BC_vec[vec_counter]<-BC_ref
+      }
+    }
+  }
+}
+BC_summary_table$Comim_All[1]<-mean(All_BC_vec)
+
+###PERMUTATIONS
+## Start the loop for permutations
+BC_mimic_null <- BC_no_mimic_null <- NA # Create vectors to store simulated mean BC values for co-mimics and non-comimics
+mean_BC_null <- matrix(ncol = length(mimicry.list_HI), nrow = 0) # Create matrix to store mean simulated BC values for each mimicry ring for each simulation
+p<-progress_estimated(999, min_time=10)
+
+
+for (k in 1:999) # 999 simulations/permutations
+{ 
+  p$pause(0.1)$tick()$print()
+  # k <- 1
+  ## Suffle mimicry ring among units
+  shuffle.list.unit <- list_OMU_HeIt
+  shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="HELICO"] <- sample(as.character(shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="HELICO"])) #shuffle for Heliconiini
+  shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="ITHO"] <- sample(as.character(shuffle.list.unit$ring_simple[shuffle.list.unit$tribe=="ITHO"])) #shuffle for Heliconiini
+  
+  # # Check if number of unit per ring is preserved
+  # table(list.unit$Mimicry.model)
+  # table(shuffle.list.unit$Mimicry.model)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+
+  
+  mean_BC <- NA
+  for (i in 1:length(mimicry.list_HI)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list_HI[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_HeIt$biomodTag[shuffle.list.unit$ring_simple == ring])
+    
+    if (ring=="PAVONII"|ring=="HUMBOLDT") #specific case of ELZUNIA, comim for two rings
+    {
+      tags2<-as.character(list_OMU_HeIt$biomodTag[shuffle.list.unit$ring_simple == "ELZUNIA"])
+    tags<-c(tags,tags2)
+    }
+    
+    if (ring=="ELZUNIA") #specific case of ELZUNIA, comim for two rings,we do not want to repeat
+    {next}
+    
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_ALL.RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_BC[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_ALL.RData")) # Save temp mat indices df to be used later to merge for all rings
+      BC <- NA # Initiate the vector used to store all BC values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        BC[j] <- unit_BC_dist_mat[mat.index[1,j],mat.index[2,j]] # Extract Bray-Curtis index from the complete matrix of BC indices
+      }
+      mean_BC[i]  <- mean(BC) # Compute mean BC for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_BC) <- mimicry.list_HI[!mimicry.list_HI=="ELZUNIA"]
+  mean_BC_null <- rbind(mean_BC_null,mean_BC) # Store the mean BC vector into the matrix of simulations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list_HI)) { # Per mimicry rings
+    ring <- mimicry.list_HI[i]
+    if(ring=="ELZUNIA")
+    {
+      next
+    }
+    load(file =  paste0("../outputs/Community_Structure/Permutations/BC_mimicry_ring_mat/simul_mat.index.",ring,"_OMU_ALL.RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  
+  # dim(all_mimic_mat_index) 
+  
+  # Retrieve all mimic values and non-co-mimic BC values at the same time
+  BC_mimic <- NA # Initiate final vector to store BC values for comimics
+  unit_BC_dist_mat_no_mimic <- unit_BC_dist_mat # Copy matrix of all BC indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    BC_mimic[j] <- unit_BC_dist_mat[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract BC index for this pair of comimics
+    unit_BC_dist_mat_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove BC value of comimics from matrix of non-comimics pairs
+  }
+  # length(BC_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  BC_no_mimic <- unit_BC_dist_mat_no_mimic[upper.tri(unit_BC_dist_mat_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  BC_no_mimic <- na.omit(BC_no_mimic) # Remove NA (the comimics pairs)
+  # length(BC_no_mimic) 
+  
+  # Save global mean computation into final vectors
+  BC_mimic_null[k] <- mean(BC_mimic)
+  BC_no_mimic_null[k] <- mean(BC_no_mimic)
+  
+  cat(paste0(Sys.time(), " - Simul n°", k," out of 1000\n"))
+  save(mean_BC_null, BC_mimic_null, BC_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_ALL.RData"))
+}
+
+summary(mean_BC_null)     # Per mimicry ring
+summary(BC_mimic_null)# For all comimic pairs
+summary(BC_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+BC_summary_table$Comim_All[2]<-mean(BC_mimic_null) #BC under null hypothesis
+
+for(i in 1:length(BC_mimic_null))
+{
+  if(BC_summary_table$Comim_All[1]<rank(BC_mimic_null)[i])
+  {
+    BC_summary_table$Comim_All[3]<-1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && BC_summary_table$Comim_All[1]<rank(BC_mimic_null)[i+1] && BC_summary_table$Comim_All[1]>rank(BC_mimic_null)[i-1])
+  {
+    BC_summary_table$Comim_All[3]<-1/i #pvalue
+    break
+  }
+}
+toc()
+save(BC_summary_table, file="../outputs/Community_Structure/BC_summary_table_OMU_HeIt.Rdata")
+
+toc()
+
+```
+
+
+```{r}
+#BC summary table but nice table
+
+
+load("../outputs/Community_Structure/BC_summary_table_OMU_HeIt.Rdata")
+BC_summary_nice_table <- BC_summary_table[,1:3]
+colnames(BC_summary_nice_table)<-c("Ithomiini comimics", "Heliconii comimics", "Inter-tribe comimics")
+rownames(BC_summary_nice_table)<-c("Bray-Curtis observed value", "Bray Curtis mean value under null hypothesis", "pvalue for permutation test")
+
+BC_summary_table_graph<-BC_summary_nice_table
+BC_summary_table_graph$toblank<-rownames(BC_summary_table_graph)
+rownames(BC_summary_table_graph)<-c()
+BC_summary_table_graph<-BC_summary_table_graph[,c(4,c(1:3))]
+colnames(BC_summary_table_graph)[1]<-" "
+ 
+BC_summary_table_graph[,2:4]<-round(BC_summary_table_graph[,2:4],3)
+
+BC_summary_formattable<-formattable(BC_summary_table_graph, align=c("l",rep("c",3), "r"), list(` ` = formatter("span", style = ~ style(color = "black",font.weight = "bold"))))
+
+saveRDS(BC_summary_formattable, "../tables/BC_formattable.RDS")
+
+export_formattable(BC_summary_formattable, "../tables/BC_summary_table.pdf")
+export_formattable(BC_summary_formattable, "../tables/BC_summary_table.png")
+```
+
+
+```{r}
+##BC for each tribe separately
+mimicry.list<-unique(list_OMU_HeIt$Ring)
+
+
+Tribe_BC_tab<-as.data.frame(matrix(nrow=length(mimicry.list), ncol=2, data=NA))
+colnames(Tribe_BC_tab)<-c("ring", "BC_obs")
+
+
+for (k in 1:length(mimicry.list))
+{
+  Tribe_vec<-c()
+  vec_counter<-0
+  ring<-mimicry.list[k]
+  Tribe_BC_tab$ring[k]<-ring
+  
+  for (i in 1:nrow(list_OMU_HeIt))
+  {
+
+     for(j in 1:nrow(list_OMU_HeIt))
+     {
+
+    if(ring==list_OMU_HeIt$Ring[i] && list_OMU_HeIt$Ring[i]==list_OMU_HeIt$Ring[j] && list_OMU_HeIt$biomodTag[i]!=list_OMU_HeIt$biomodTag[j])
+    {
+      
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Tribe_vec[vec_counter]<-BC_ref
+     } 
+      }
+  
+  }
+  Tribe_BC_tab$BC_obs[k]<-mean(Tribe_vec)
+}
+save(Tribe_BC_tab, file="../outputs/Community_Structure/BC_mimicry_ring_mat/Tribe_BC_tab.rdata")
+
+#BC for all both tribe mimics
+
+Both_BC_tab<-as.data.frame(matrix(nrow=length(COMIM_rings$ring_simple_ITHO), ncol=2, data=NA))
+colnames(Both_BC_tab)<-c("ring", "BC_obs")
+
+
+for (k in 1:length(COMIM_rings$ring_simple))
+{
+  Both_vec<-c()
+  vec_counter<-0
+  ring<-COMIM_rings$ring_simple_ITHO[k]
+ 
+  Both_BC_tab$ring[k]<-ring
+  
+  for (i in 1:nrow(list_OMU_HeIt))
+  {
+
+     for(j in 1:nrow(list_OMU_HeIt))
+     {
+
+    if(ring==list_OMU_HeIt$ring_simple[i] && list_OMU_HeIt$ring_simple[i]==list_OMU_HeIt$ring_simple[j] && list_OMU_HeIt$biomodTag[i]!=list_OMU_HeIt$biomodTag[j])
+    {
+      
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Both_vec[vec_counter]<-BC_ref
+    }
+    if (COMIM_rings$ring_simple_ITHO[k]!=COMIM_rings$ring_simple[k])  
+    {
+          if(ring==list_OMU_HeIt$ring_simple[i] && COMIM_rings$ring_simple[k]==list_OMU_HeIt$ring_simple[j])
+    {
+      
+      ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+      BC_ref<-unit_BC_dist_mat[ref_1,ref_2]
+      vec_counter<-vec_counter+1
+      Both_vec[vec_counter]<-BC_ref
+    }
+    }
+      }
+  
+  }
+  Both_BC_tab$BC_obs[k]<-mean(Both_vec)
+}
+save(Both_BC_tab, file="../outputs/Community_Structure/BC_mimicry_ring_mat/Both_BC_tab.rdata")
+
+```
+
+```{r}
+
+mimicry.list_HI<-unique(list_OMU_HeIt$ring_simple)
+
+load(file="../outputs/Community_Structure/BC_mimicry_ring_mat/Tribe_BC_tab.rdata")
+#load mean values for tribe (no comimic between tribe considered)
+
+load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_IT.RData")) # Load null mean BC values Itho
+Itho_mean_BC_null<-mean_BC_null
+
+load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_HE.RData")) #load null for Helico
+Helico_mean_BC_null<-mean_BC_null
+
+
+# Build summary table for mimicry ring BC results at the same time
+BC_ring_summary_table <- as.data.frame(matrix(ncol = 8, nrow = 99, data = NA))
+names(BC_ring_summary_table) <- c("tribe", "ring", "N_units", "N_pairs", "BC_obs", "mean_BC_simul", "p_value", "Signif" )
+
+
+
+for (i in 1:length(mimicry.list))  # Per mimicry ring
+{
+  # i <- 1
+
+ 
+    
+  BC_ring_summary_table$ring[i] <- ring <- mimicry.list[i] # Get ring name
+
+  BC_ring_summary_table$N_units[i] <- N_units <- sum(list_OMU_HeIt$Ring== ring) # Get number of OMUs
+  BC_ring_summary_table$N_pairs[i] <- N_pairs <- N_units*(N_units-1)/2 # Get number of pairs
+  
+   if (str_detect(ring, "HELICO")==TRUE)
+  {
+    BC_ring_summary_table$tribe[i]<-"HELICONIINI"
+    mean_BC_null<-Helico_mean_BC_null
+   }
+     if (str_detect(ring, "ITHO")==TRUE)
+  {
+    BC_ring_summary_table$tribe[i]<-"ITHOMIINI"
+    mean_BC_null<-Itho_mean_BC_null
+  }
+  
+  
+  if (is.na(Tribe_BC_tab$BC_obs[Tribe_BC_tab$ring==ring]))# Case for ring with no pair of OMUs (only one OMU/species)
+  {
+    
+   next
+    
+  } else { # Case for ring with pair(s) of OMUs 
+    
+    BC_ring_summary_table$BC_obs[i] <- round(Tribe_BC_tab$BC_obs[Tribe_BC_tab$ring==ring],3) # Get mean BC obs
+    
+    BC_ring_summary_table$mean_BC_simul[i] <- round(mean(mean_BC_null[,as.character(ring)]),3) # Get mean of mean BC null from simulations
+    
+    BC_ring_summary_table$p_value[i] <- round(ecdf(x =c(  mean_BC_null[,as.character(ring)] ,                                           BC_ring_summary_table$BC_obs[i])) 
+( BC_ring_summary_table$BC_obs[i]),3) # Get p-value from simulations
+    
+    if(BC_ring_summary_table$p_value[i]<=0.05)
+    {
+      BC_ring_summary_table$Signif[i]<-"*"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.01)
+    {
+      BC_ring_summary_table$Signif[i]<-"**"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.001)
+    {
+      BC_ring_summary_table$Signif[i]<-"***"
+    }
+    
+    save(BC_ring_summary_table, file =paste0( "../outputs/Community_Structure/BC_ring_summary_table_HeIt.Rdata"))
+    
+   
+    
+  }
+  
+  cat(paste0(i, " out of 83 - ",ring, " - Done \n"))
+}
+###Add comimics between tribes to the tab
+
+load(file="../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_HEIT.RData") #null
+load(file = "../outputs/Community_Structure/BC_mimicry_ring_mat/IthoVSHelico/BC_mimic_HeIt_OMU_mat.RData")
+j=0
+
+for (i in (length(mimicry.list)+1):(length(mimicry.list)+length(COMIM_rings$RINGH))) #add comimics
+{
+  j=j+1
+  ring <- COMIM_rings$ring_simple_ITHO[j] # Get ring name
+   BC_ring_summary_table$ring[i] <-   ringB<-paste0(ring,".BOTH")
+   ringH<-COMIM_rings$ring_simple[j]
+
+  BC_ring_summary_table$N_units[i] <- N_units <- sum(list_OMU_HeIt$ring_simple == ring) # Get number of OMUs
+  N_units_I <- sum(list_OMU_HeIt$Ring == paste0(ring,".ITHO"))
+    
+  if(ring!=ringH)
+  {
+    N_units_H <- sum(list_OMU_HeIt$ring_simple == ringH)
+    BC_ring_summary_table$N_units[i] <- N_units <- N_units + N_units_H
+  }else{
+    N_units_H <- sum(list_OMU_HeIt$Ring == paste0(ring,".HELICO"))
+  }
+  BC_ring_summary_table$N_pairs[i] <- N_pairs <- N_units_H*N_units_I # Get number of pairs (1 by one comparisons for Inter)
+  
+
+    BC_ring_summary_table$tribe[i]<-"INTER"
+   
+
+  
+  if (is.na(mean_BCHI[names(mean_BCHI)==ringB]))# Case for ring with no pair of OMUs (only one OMU/species)
+  {
+    
+   next
+    
+  } else { # Case for ring with pair(s) of OMUs 
+    
+    BC_ring_summary_table$BC_obs[i] <- round(mean_BCHI[names(mean_BCHI)==ringB],3) # Get mean BC obs
+    
+    BC_ring_summary_table$mean_BC_simul[i] <- round(mean(mean_BC_null[,as.character(ring)]),3) # Get mean of mean BC null from simulations
+    
+    BC_ring_summary_table$p_value[i] <- round(ecdf(x =c(  mean_BC_null[,as.character(ring)] ,                                           mean_BCHI[names(mean_BCHI)==ringB])) 
+( mean_BCHI[names(mean_BCHI)==ringB]),3) # Get p-value from simulations
+        if(BC_ring_summary_table$p_value[i]<=0.05)
+    {
+      BC_ring_summary_table$Signif[i]<-"*"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.01)
+    {
+      BC_ring_summary_table$Signif[i]<-"**"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.001)
+    {
+      BC_ring_summary_table$Signif[i]<-"***"
+    }
+    
+    save(BC_ring_summary_table, file =paste0( "../outputs/Community_Structure/BC_ring_summary_table_HeIt.Rdata"))
+    
+   
+    
+  }
+  
+  cat(paste0(j, " out of 8 - ",ring, " - Done \n"))
+}
+
+##Add comparisons with all Comimics
+
+load(file="../outputs/Community_Structure/Permutations/All_simul_mean_BC_OMU_ALL.RData") #null
+load(file = "../outputs/Community_Structure/BC_mimicry_ring_mat/Both_BC_tab.rdata")
+j=0
+
+for (i in (length(mimicry.list)+nrow(COMIM_rings)+1):(length(mimicry.list)+nrow(COMIM_rings)*2)) #add comimics
+{
+  j=j+1
+  ring <- COMIM_rings$ring_simple_ITHO[j] # Get ring name
+   BC_ring_summary_table$ring[i] <-   ring
+   ringH<-COMIM_rings$ring_simple[j]
+
+  BC_ring_summary_table$N_units[i] <- N_units <- sum(list_OMU_HeIt$ring_simple == ring) # Get number of OMUs
+    
+  if(ring!=ringH)
+  {
+    N_units_H <- sum(list_OMU_HeIt$ring_simple == ringH)
+    BC_ring_summary_table$N_units[i] <- N_units <- N_units + N_units_H
+  }
+  BC_ring_summary_table$N_pairs[i] <- N_pairs <- N_units*(N_units-1)/2 # # Get number of pairs (1 by one comparisons for Inter)
+  
+
+    BC_ring_summary_table$tribe[i]<-"BOTH"
+   
+
+  
+  if (is.na(Both_BC_tab$BC_obs[Both_BC_tab$ring==ring]))# Case for ring with no pair of OMUs (only one OMU/species)
+  {
+    
+   next
+    
+  } else { # Case for ring with pair(s) of OMUs 
+    
+    BC_ring_summary_table$BC_obs[i] <- round(Both_BC_tab$BC_obs[Both_BC_tab$ring==ring],3) # Get mean BC obs
+    
+    BC_ring_summary_table$mean_BC_simul[i] <- round(mean(mean_BC_null[,as.character(ring)]),3) # Get mean of mean BC null from simulations
+    
+    BC_ring_summary_table$p_value[i] <- round(ecdf(x =c(  mean_BC_null[,as.character(ring)] ,                                           Both_BC_tab$BC_obs[Both_BC_tab$ring==ring])) 
+( Both_BC_tab$BC_obs[Both_BC_tab$ring==ring]),3) # Get p-value from simulations
+        if(BC_ring_summary_table$p_value[i]<=0.05)
+    {
+      BC_ring_summary_table$Signif[i]<-"*"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.01)
+    {
+      BC_ring_summary_table$Signif[i]<-"**"
+    }
+    if(BC_ring_summary_table$p_value[i]<=0.001)
+    {
+      BC_ring_summary_table$Signif[i]<-"***"
+    }
+    
+    save(BC_ring_summary_table, file =paste0( "../outputs/Community_Structure/BC_ring_summary_table_HeIt.Rdata"))
+    
+   
+    
+  }
+  
+  cat(paste0(j, " out of 8 - ",ring, " - Done \n"))
+}
+
+
+View(BC_ring_summary_table)
+write.csv2(BC_ring_summary_table, file =paste0( "../tables/BC_ring_summary_table_HeIt.csv"))
+
+print(paste0("Done for all OMU"))
+
+```
+
+```{r}
+###Nice table for rings
+load(file =paste0( "../outputs/Community_Structure/BC_ring_summary_table_HeIt.Rdata"))
+BC_ring_summary_table_graph<-BC_ring_summary_table[BC_ring_summary_table$tribe != "BOTH",]
+
+colnames(BC_ring_summary_table_graph) <- c("Tribe", "Mimicry ring", "Number of units", "Number of pairs", "Bray-Curtis observed value", "Bray Curtis mean value under null hypothesis", "pvalue for permutation test", "Significativity")
+
+BC_ring_summary_table_graph$`Mimicry ring`<-str_replace_all(BC_ring_summary_table_graph$`Mimicry ring`, c("[.]BOTH"="", "[.]HELICO"="", "[.]ITHO"=""))
+
+#BC_ring_summary_table_graph$Tribe[BC_ring_summary_table_graph$Tribe=="BOTH"]<-"ZBOTH"
+BC_ring_summary_table_graph$Tribe[BC_ring_summary_table_graph$Tribe=="INTER"]<-"ZINTER"
+
+BC_ring_summary_table_graph<-rbind(BC_ring_summary_table_graph, c("HELICONIINI", "A", rep("", ncol(BC_ring_summary_table_graph)-2)))
+BC_ring_summary_table_graph<-rbind(BC_ring_summary_table_graph, c("ITHOMIINI", "A", rep("", ncol(BC_ring_summary_table_graph)-2)))
+# BC_ring_summary_table_graph<-rbind(BC_ring_summary_table_graph, c("ZBOTH", "A", rep("", ncol(BC_ring_summary_table_graph)-2)))
+BC_ring_summary_table_graph<-rbind(BC_ring_summary_table_graph, c("ZINTER", "A", rep("", ncol(BC_ring_summary_table_graph)-2)))
+
+BC_ring_summary_table_graph<-BC_ring_summary_table_graph[with(BC_ring_summary_table_graph, order(Tribe, `Mimicry ring`)),]
+
+BC_ring_summary_table_graph$Tribe[BC_ring_summary_table_graph$Tribe=="ZBOTH"]<-"BOTH"
+BC_ring_summary_table_graph$Tribe[BC_ring_summary_table_graph$Tribe=="ZINTER"]<-"INTER"
+BC_ring_summary_table_graph$`Mimicry ring`[BC_ring_summary_table_graph$`Mimicry ring`=="A"]<-""
+
+for(i in 1:nrow(BC_ring_summary_table_graph))
+{
+  if(BC_ring_summary_table_graph$`Mimicry ring`[i]!="")
+  {
+    BC_ring_summary_table_graph$Tribe[i]<-""
+  }
+}
+BC_ring_summary_table_graph$Significativity[is.na(BC_ring_summary_table_graph$Significativity)]<-""
+rownames(BC_ring_summary_table_graph)<-NULL
+
+NA_rows<-c()
+NA_counter=0
+for (i in 1:nrow(BC_ring_summary_table_graph))
+{
+  if(BC_ring_summary_table_graph$`Number of units`[i]==1)
+  {
+  NA_counter<-NA_counter+1
+  NA_rows[NA_counter]<-i
+  }
+}
+
+BC_ring_summary_formattable <- formattable(BC_ring_summary_table_graph,
+            align =c("l","l",rep("c", 5),"l"), 
+            list(
+              Tribe = formatter("span", style = ~ style(color = "black",font.weight = "bold", font.size="120%")),
+              area(row = NA_rows, col = 2:8) ~  formatter("span", style = ~ style(color = "lightgrey"))
+            )
+)
+
+export_formattable(BC_ring_summary_formattable, "../tables/BC_ring_summary_table.png")
+export_formattable(BC_ring_summary_formattable, "../tables/BC_ring_summary_table.pdf")
+}
+```
+

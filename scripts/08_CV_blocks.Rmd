@@ -1,0 +1,209 @@
+---
+title: "08_CV_Blocks"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##### Script 08:  Generation of Cross-validation blocks for ssp with N ≥ 30 #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+### Goals = 
+ # Generate a 3-fold CV scheme based on spatial-blocks to evaluate models
+ 
+### Inputs 
+   # Summary table for ssp models (list_occ)
+   # Spatial object with occurrences and PsA coordinates from Script 07
+   # PA tables from script 07
+
+###
+
+### Outputs
+  
+   # CV scheme for each ssp with N ≥ 30 as calib.lines in Biomod2 (calib_array)
+   # PDF plots with repartition of occurrences and PsA between folds
+
+###
+
+
+```{r}
+###clean envi + packages
+rm(list = ls())
+
+library(ade4)
+library(dplyr)
+library(sf)
+library(rgl)
+library(stringr)
+library(tidyr)
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(ggplot2)
+library(raster)
+library(tmap)
+library(tmaptools)
+library(blockCV)
+
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+
+```
+
+```{r}
+### 2/ Load stuff useful for all units (outside the loop) ####
+
+### Load table to track model outputs
+  load(file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+load("../input_data/useful_vectors/list_occ_vec.RData")
+load("../input_data/useful_vectors/list_species.RData")
+### Select Env data
+
+# Load environmental stack
+envData <- readRDS("../input_data/envData/Envstack.rds")
+
+# Set seed to ensure repetability of random PsA draws
+set.seed(277461)
+
+# Choose the number of CV folds to separate the occurrences and PsA in between
+nb.of.folds = 3
+
+source("../functions/progcombine.R")
+
+
+```
+
+```{r}
+##### 3/ Loop to generate cross validation blocks  ######
+
+
+
+for (k in seq_along(list_occ_vec)) {
+   
+#} (k = seq_along(list_occ_vec), .combine = progcombine_rbind(nreps = length(list_occ_vec)), .init = NULL) %dopar% {
+  # temp <- foreach (k = 1:5) %dopar% {
+  # k <- 1
+  
+  unit <- as.character(list_occ_vec[k])
+  sp <- list_species[k]
+  
+  N.obs <- list_occ$N.obs_envOtl[k]
+  ModeleType <- list_occ$initial_model_type[k]
+  
+  # Do the CV only for units with at least 30 occurrences
+  if (ModeleType=="restricted" | ModeleType=="rasterized") {
+    
+    # Warning message for OMU with less than 30 obs
+    cat("\n", as.character(Sys.time()), "----- No need for CV blocks generation for", unit, "= Unit N°",k,"\n")
+    
+  } else { # CV design for OMU with at least 30 obs
+    
+    cat("\n", as.character(Sys.time()), "----- CV blocks generation starts for", unit, "= Unit N°",k,"\n")
+    
+    # Load spatial points with PsA for this unit/OMU
+    load(file = paste0("../input_data/Species_data/Spatial_Points_Objects/occ_&_PsA_", unit,".RData"))
+    
+    # Transform spatial points to an sf object
+    occ_PsA_data <- sf::st_as_sf(unit_points.PsA, coords = c("x", "y"), crs = raster::crs(envData))
+    
+    # Need to create as many folds as there are PsA sets
+    # Load PA.table
+    load(file = paste0("../input_data/Species_data/PA.Tables/PA.table_", unit,".RData"))
+    
+    # 3.1/ Generate empty array to record calibration and validation lines (calib.lines in Biomod2) ####
+    
+    # NA = not use in this run. T = calibration/learning set. F = validation/test set.
+    # Start with array full of NA.
+    calib_array <- array(dim = c(nrow(PA.table),   # Number of occrrences and PsA
+                                 nb.of.folds,      # Number of CV folds
+                                 ncol(PA.table)),  # Number of PsA_set
+                         dimnames = list(NULL,                              # No name for point rows
+                                         paste0("_RUN", 1:nb.of.folds),     # Need to add "_" as in BioMod2 calib.lines
+                                         colnames(PA.table))                # Keep PA set names from PA.table
+    )
+    
+    for (pa in colnames(PA.table)) { # Generate CV table for each PA.run
+      
+      cur.occ_PsA_data <- occ_PsA_data[which(PA.table[, pa]), ]  # Get only lines for the current PsA run
+      
+      # Transform PsA into Absences (0) to get the spatialBlock function working and obtain balanced folds with as many Presence and PsA (seen as Absences)
+      cur.occ_PsA_data$Presences_Pseudo.Absences[which(is.na(cur.occ_PsA_data$Presences_Pseudo.Absences))] <- 0
+     
+###To explore ranges      
+#blockCV::rangeExplorer(envData, minRange = 90, maxRange = 3000)
+###450km seems to be a good range
+            
+       
+      # 3.2/ Run the fold repartition process ####
+  Range=450 
+      if(unit=="Heliconius_charithonia_churchi" | unit=="Heliconius_eleuchia_primularis") {Range=200} #original range too wide for this taxa
+      
+      cur.blocks <- spatialBlock(speciesData = cur.occ_PsA_data,           # Sf_object with data
+                                 species = "Presences_Pseudo.Absences",    # Column with Presence (1), Absence (0), and PsA (NA)
+                                 rasterLayer = envData[["elev"]],     
+                                 theRange = Range,                        # Block range set to 450km, the fonction say it is in meter but with MW proj we need to directly use km
+                                 k = nb.of.folds,                          # nb of CV folds to generate
+                                 selection = "random",                     # Assign folds to each blocks randomly
+                                 iteration = 100,                          # Nb of iterations allowed to try to find the best sorting which balance Presence and PsA among folds
+                                 showBlocks = F,                           # Don't plot automatically
+                                 biomod2Format = TRUE)                     # Get an output in the Biomod2 format
+      
+      # Results : train_0 = Nb of PsA for calibration/learning
+      #           train_1 = Nb of presences for calibration/learning
+      #           test_0 = Nb of PsA for evaluation/learning
+      #           test_1 = Nb of presences for evaluation/learning
+      
+      # Fill calib.array with the output of spatialBlock
+      
+      calib_array[which(PA.table[, pa]), , pa] <- cur.blocks$biomodTable # Only the lines for this PsA set model
+      
+      # 3.3/ Save a plot of this CV repartition ####
+      
+      shape_vector <- as.factor((-1*cur.occ_PsA_data$Presences_Pseudo.Absences) + 2)
+      cur.occ_PsA_data <- cbind(cur.occ_PsA_data, foldID = as.factor(cur.blocks$foldID), Type = shape_vector)
+      
+      pdf(file = paste0("../input_data/Species_data/CV_blocks/block_maps/block_map_", unit,"_", pa, ".pdf"), height = 8, width = 10)
+      
+      block_map <- tm_shape(envData[["elev"]]) + tm_raster(palette = terrain.colors(10), legend.show = F) + tm_layout(legend.position = c("left", "bottom")) +
+        tm_shape(cur.occ_PsA_data) + tm_dots(shape = "Type", col = "foldID", palette = c("black", "dodgerblue", "red"), size = 0.4, border.col = "black", border.lwd = 2, legend.show = F) +
+        tm_layout(title = paste0("Fold repartition for spatial CV of ", unit, " for ", pa)) +
+        tm_add_legend(type = "fill", labels = c(" 0 to 1,000"," 1,000 to 2,000", " 2,000 to 3,000", " 3,000 to 4,000", " 4,000 to 5,000", " 5,000 to 6,000"), col = terrain.colors(6), border.col = NA, title = "Elevation") +
+        tm_add_legend(type = "symbol", shape = 20, labels = c("1","2","3"), col = c("black", "dodgerblue", "red"), title = "CV fold", size = 0.8) +
+        tm_add_legend(type = "symbol", shape = c(21, 22) , labels = c(" Presence"," Pseudo-absence"), col = "black", title = "Type", size = 0.5)
+      
+      print(block_map)
+      
+      dev.off()
+      
+      # Save folds infos for this PsA set
+      saveRDS(cur.occ_PsA_data, file = paste0("../input_data/Species_data/CV_blocks/CV_folds_data/CV_folds_data_", unit,"_",pa,".rds"))
+      
+    }
+    
+    # save CV infos for this OMU
+    save(calib_array, file = paste0("../input_data/Species_data/CV_blocks/calib_arrays/calib_array_", unit,".RData"))
+    saveRDS(calib_array, file = paste0("../input_data/Species_data/CV_blocks/calib_arrays/calib_array_", unit,".rds"))
+    
+    cat("\n", as.character(Sys.time()), "----- CV blocks generation for", unit, "= Unit N°",k,"- Done\n")
+    
+  }
+}
+
+# Close clusters generated with registerDoParallel(numCores)
+# stopImplicitCluster()
+# Close clusters generated with makeCluster 
+#stopCluster() 
+
+#around 56min 
+
+```
+
+

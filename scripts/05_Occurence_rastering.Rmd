@@ -1,0 +1,417 @@
+---
+title: "05_Occurence_rastering"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 05: Occurrence rasterizing #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Apply raster grid to merge occurrences in the same grid cell (spatial filtering)
+
+# Remove occurrences without environnemntal data associated to their location
+    # But try to retrieve data in a small range (max 50km) to keep a maximum of occurrences
+    # Rationale is that many occurrences with no env. data are just coastal points falling just aside the pixels with valid env. data.
+# Generate spatial objects with corrected coordinates to correspond to grid cell centroids
+# Stack final environmental layer, corrected for occurrences in error when possible
+#Decide type of modelling for each subspecies:
+    # occ < 6 : no modelling
+    # 6 <occ < 30 : modelling restricted (no cross validations blocks)
+    # occ > 30 : full modelling
+
+### Inputs
+#Occurrence data
+#Environmental stack of selected variables
+
+###
+
+### Outputs
+# Rasterized occurrences, for each subspecies
+# Occurrences dataset with modelling choice info
+
+###
+
+
+
+```{r}
+# Remove environment
+rm(list = ls())
+
+# Load libraries
+library(raster)
+library(dplyr)
+library(sf)
+library(sp)
+library(stringr)
+library(ggplot2)
+library(readxl)
+
+```
+ 
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+
+```
+ 
+ 
+```{r}
+##chargement des donnees
+occurence<-read.csv("../input_data/occurences_df/DB_with_MimRin.csv", header=T, sep=";")
+occurence<- occurence [occurence$esp != "sp"
+                       & occurence$esp != ""
+                       & is.na(occurence$fullname) ==FALSE,]
+
+envi<-readRDS("../input_data/envData/Envstack.rds")
+
+```
+ 
+ 
+```{r}
+###Cretation liste occurences
+
+##chargement esp monotypique
+esp_monotypique <- readRDS(file = "../input_data/useful_vectors/sp_monotypique.RDS")
+
+##suppression avec id trop imprécis (sp mais pas sp monotypique)
+occurence$ssesp[is.na(occurence$ssesp)==TRUE]<-"" #probleme de NA
+
+for (i in 1:nrow(occurence)) {
+  if ( occurence$ssesp[i]!="" |
+       is.na( match( occurence$fullname[i], esp_monotypique )) == FALSE)
+  { occurence$taxoOK[i]<-TRUE}
+  else {occurence$taxoOK[i] <- FALSE}
+}
+
+occurence_correct<-occurence[occurence$taxoOK==TRUE,]
+
+###Listes des nb d occurences par taxon
+list_occ<-occurence_correct %>% 
+  group_by(fullname,) %>% summarize(count=n()) #liste des occurences
+
+```
+
+```{r}
+####
+
+occ_coord <- structure(list(longitude = occurence_correct$Lon, latitude = occurence_correct$Lat), .Names = c("longitude", 
+"latitude"), class = "data.frame", row.names = c(NA, -67622L))
+
+
+### Get long and lat from your data.frame. Make sure that the order is in lon/lat.
+
+xy <- occ_coord[,c(1,2)]
+
+###long et lat sous forme d'objet sp
+spdf <- SpatialPointsDataFrame(coords = xy, 
+                               data = occurence_correct,
+                               proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+
+##projection en MW
+Occ_MW <- spTransform(spdf, CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+plot(Occ_MW)
+
+```
+ 
+```{r}
+#Code units
+list_occ$code_unit <- str_replace_all(list_occ$fullname, " ", "_")
+list_occ$code_unit <-str_replace(list_occ$code_unit, "sp_nov", "sp.nov")
+list_occ_vec <- list_occ$code_unit
+save(list_occ_vec, file = "../input_data/occurences_df/list_occ_vec.RData")
+saveRDS(list_occ_vec, file = "../input_data/occurences_df/list_occ_vec.RDS")
+
+Occ_MW$code_unit <- str_replace_all(Occ_MW$fullname, " {1,2}", "_")
+Occ_MW$code_unit <-str_replace(Occ_MW$code_unit, "sp_nov", "sp.nov")
+save(Occ_MW, file = "../input_data/occurences_df/Occ_MW.RData")
+saveRDS(Occ_MW, file = "../input_data/occurences_df/Occ_MW.RDS")
+saveRDS(occurence_correct, file = "../input_data/occurences_df/Occ_df_clean_WGS.RDS")
+
+list_no_envi<-c() #for taxa with no environnemental data
+s<-1
+```
+
+```{r message=FALSE, results=hide}
+
+### Loop per ssp
+for (k in seq_along(list_occ_vec)) {
+  unit <- as.character(list_occ_vec[k])
+  
+  cat(as.character(Sys.time()), "----- Start for", unit, "= Unit N°",k,"\n")
+  unit_coords <-  Occ_MW@coords[(Occ_MW$code_unit == unit),]
+  
+  if(length(unit_coords)==2) #case with only one occurence bc it is considered as a vestor and not a df
+    {unit_coords<-as.data.frame(t(as.matrix(unit_coords)))}
+  
+  ### 1.1/ Rasterize occurrences ####
+  unit_occ <- rasterize(x = unit_coords, # Occurrence coordinates
+                        y = envi, # Env stack grid to apply
+                        field = 1, # Value to store in the raster
+                        fun = function(x, ...) mean(x)) # Apply mean to keep value = 1 in case of multiple occurrences in one pixel
+  
+  
+  unit_env <- stack(unit_occ, envi) # Add the rasterized occurrence layer to the env stack
+  
+  # Count occurrences after rasterization and before correction for NA values
+    list_occ$N.obs_[k] <- sum(unit_occ[], na.rm = T)
+    
+# Check if occurrences match env data
+  coorXY <- xyFromCell(envi, 1:ncell(envi)) # Coordinates of centroid of pixels
+  unit_env_df <- getValues(unit_env) # Values of the Env stack, in a df, per layers
+ 
+   ### 1.2/ Correction of occurrences without env data by looking around for values in a limited range ####
+  
+  Err.test <- 0 # Register failure, to start with
+  
+  # Check if any occurrence pixel as an NA value for envrionnmental layer (just need to check for the first one since all NA of env layers are synchronized)
+    if(any(is.na(unit_env_df[, "bio1"]) & !is.na(unit_env_df[, "layer"]))) {
+  
+    Err.test <- 1 # Register presence of errors
+    index.error <- which(is.na(unit_env_df[, "bio1"]) & !is.na(unit_env_df[, "layer"])) # Retreive indices for pixels with errors
+    
+    # Display how many occurrence points are outside the bioclimatic mask
+    cat(length(index.error), "occurrences of", unit ,"are in pixels without environnmental values\n") 
+
+      coorXY_errors <- coorXY[index.error,] # Retrieve coordinates of pixels in error
+    res.error <- data.frame(index.error)  # Create a df to store result of research
+    
+    # Retrieve env infos in neighboring pixels around the occurrence point
+    for (i in seq_along(index.error)) {
+      index <- index.error[i]
+      Error.occ <- unit_env_df[index,]  # Extract occurence line
+      buffer <- 5                    # 1st buffer = 5km
+      while (anyNA(Error.occ) && (buffer<=50)) { # Enlarge buffer while no data has beeen retrieve or 50km radius is reached
+        if (length(index.error) == 1) { # Different format when only once error
+          Error.occ <- unlist(raster::extract(x = envi, y = t(as.matrix(coorXY_errors)), buffer = buffer, fun = mean))
+        }else{
+          Error.occ <- unlist(raster::extract(x = envi, y = t(as.matrix(coorXY_errors[i,])), buffer = buffer, fun = mean))
+        }
+        buffer <- buffer + 5 # New buffer = + 5km
+      }
+      
+      if (!anyNA(Error.occ)) { # When research for data succeeded
+        
+        cat("Buffer",index,"for",unit,"=",(buffer-5)/1,"km\n") # Display buffer final radius
+        unit_env_df[index,2:ncol(unit_env_df)] <- Error.occ # Write env infos in the recorded location of the occurrence
+        res.error$Res[i] <- 1 # Register the success
+        
+      }else{ # When research for data failed
+        
+        cat("Occurrence",index,"for",unit,"has been removed because no env. data was available in a 50km radius\n")
+        unit_env_df[index, 1] <- NA # Delete the occurrence
+        res.error$Res[i] <- 0 # Register the failure
+      }
+      
+    }
+    
+    for (j in 1:nlayers(unit_env)) {
+      unit_env@layers[[j]]@data@values <- unit_env_df[,j] # Replace data in the envi stack
+    }  
+    
+  } else { # Case when all occurrences have env. data
+    
+    cat(unit,": All occurrences present Env. data\n")
+    
+  }
+  
+  # Save the modified occurrence layer independently
+  Binary_Raster_Occ <- unit_env[[1]] # Name the layer of usable Occurrences with a generic name
+  save(Binary_Raster_Occ, file = paste0("../input_data/Species_data/Binary_Rasters_from_Occurrences/",unit,".RData")) # Save in .RData
+  saveRDS(Binary_Raster_Occ, file = paste0("../input_data/Species_data/Binary_Rasters_from_Occurrences/",unit,".rds")) # Save in .rds
+  
+  # Compute the new number of occurrences and extract their coordinates
+  coorXY <- coorXY[-which(is.na(unit_env_df[, "bio1"])), ] # Coordinates of pixels with env data
+  unit_env_df <- unit_env_df[-which(is.na(unit_env_df[, "bio1"])), ] # Extract only lines with env data
+  
+  # Store info on nb of occurrences after correction
+     list_occ$N.obs_used[list_occ$code_unit == unit] <- length(which(unit_env_df[, 1] == 1))
+     
+     
+    
+  cat(unit, "Number of pixels of presence:", length(which(unit_env_df[, 1] == 1)), "\n")  # Nb of valid presence points (with env. values associated)
+  # cat(unit, "Number of pixels of absence:", length(which(unit_env_df[, 1] == 0)), "\n") # Nb of valid absence points (with env. values associated)
+  
+  coorXY_valid <- coorXY[which(!is.na(unit_env_df[, 1])), ] # Coordinates of pixels with env. values and occurrences data = the ones we want to keep
+  if (length(coorXY_valid) == 2) { # Format correction, when only one occurrence
+    coorXY_valid <- data.frame(t(as.matrix(coorXY_valid)))
+  }
+  
+  ### 2.4/ Generate sp object (package sp) with only valid occurrences, and coordinates of pixel centroids ####
+  
+if(nrow(coorXY_valid)==0) #in case there is no environnemental data 
+{
+  cat(unit,"No environnemental data")
+  list_no_envi[s]<-unit
+  s=s+1
+  vec_is_occ <- rep(1,times=nrow(unit_coords)) 
+  unit_points <-SpatialPointsDataFrame(unit_coords, # Coordinates of pixels with env. values and occurrences data = the ones we want to keep
+                                        data = data.frame(Occurrence = vec_is_occ), # Extract values of occurrences (0/1)
+                                        proj4string = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")) # Define the CRS
+  }else
+    { #at least one envi data
+  unit_points <- SpatialPointsDataFrame(coorXY_valid, # Coordinates of pixels with env. values and occurrences data = the ones we want to keep
+                                        data = data.frame(Occurrence = unit_env_df[which(!is.na(unit_env_df[, 1])), 1]), # Extract values of occurrences (0/1)
+                                        proj4string = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")) # Define the CRS
+  
+  ### 2.5/ Plot occurrence correction results per units ####
+  
+  pdf(file = paste0("../input_data/Species_data/Occurrence_correction_maps/Occurrence_correction_map_",unit,".pdf"), height = 8, width = 8) 
+  original_ext_margins <- par()$oma ; original_int_margins <- par()$mar
+  par(oma = c(0,2,0,3), mar = c(5.1,2.1,4.1,2.1), xpd=NA)
+  par(mfrow = c(1,1)); plot(envi[[1]], las = 1, main = unit)
+  
+  points(unit_coords[, 1] , unit_coords[, 2] , cex = 1, pch = 16) # Plot original occurrence points
+  plot(unit_points, add = T, cex = 0.6, pch = 16, col = "blue") # Add the one with env data
+  
+
+  if (Err.test) { # Case when there was points with no data
+    if (length(index.error) == 1) { # Case with only one error to correct
+      if (res.error$Res) { # Case when the point was corrected
+        points(coorXY_errors, cex = 0.6, pch = 16, col = "orange") # Add retrieved data points
+      }else{ #  Case when the point was not corrected
+        points(coorXY_errors, cex = 0.6, pch = 16, col = "red") # Add failed data points
+      } # Case with multiple errors to correct
+    }else{
+      points(coorXY_errors[res.error$Res,], cex = 0.6, pch = 16, col = "orange") # Add retrieved data points
+      points(coorXY_errors[!res.error$Res,], cex = 0.6, pch = 16, col = "red") # Add failed data points
+    }
+  }
+  legend(legend = c("OK","Extrapoled","Deleted"), pch = 16, pt.cex = 1.3, col = c("blue", "orange", "red"), x = "bottomleft", cex = 0.9, bty ="o")
+  par(mar = original_ext_margins, oma = original_ext_margins, xpd = F)
+  dev.off()
+  }
+  
+  # Save final Spatial Object
+  save(unit_points, file = paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_", unit,".RData")) # Sauvegarde du nouvel objet spatial des P/A
+  
+  # Save environnmental stack with modifs for extrapolated data
+  unit_env <- dropLayer(x = unit_env, i = 1) # Remove Occurrence layer
+  save(unit_env, file = paste0("../input_data/Species_data/Env_Stacks/Env_stack_",unit,".RData"))
+  
+  cat(paste0(Sys.time(), " - Occurences Filtering for ", unit, " = Unit N°",k," - Done\n"))
+  
+  
+}
+
+```
+
+ 
+```{r}
+######Saving objects#######
+# For whatever reason, the reshaping of the output as a row.bind df does not work, so need to do it manually afterwards
+
+save(list_occ, file = "../input_data/occurences_df/list_occ.RData")
+
+```
+
+```{r}
+###Plot occurences used to define which modelisation process we will use depending of the number of occurences
+hist(list_occ$N.obs_used[list_occ$N.obs_used<20], breaks  = seq(0,20,2))
+sum((list_occ$N.obs_used >= 10) & (list_occ$N.obs_used < 30))
+sum((list_occ$N.obs_used >= 5) & (list_occ$N.obs_used < 30)) 
+sum(list_occ$N.obs_used < 10)
+sum(list_occ$N.obs_used >= 30)
+
+obs_data <- data.frame(N.obs = c(list_occ$N.obs_used), Type = c(rep("obs", times = nrow(list_occ))))
+
+# Histogram
+obs_data %>% 
+  filter(obs_data$N.obs <= 20) %>% 
+  ggplot(aes(x = N.obs, fill = Type)) + geom_histogram(position = "dodge", binwidth = 1) +
+  geom_vline(xintercept = c(5, 10))
+
+# Density plot
+obs_data %>% 
+  filter(obs_data$N.obs <= 30) %>% 
+  ggplot(aes(x = N.obs, fill = Type, color = Type)) + geom_density(alpha = 0.3) +
+  geom_vline(xintercept = c(5, 10))
+
+
+pdf(file = paste0("../input_data/Species_data/Comparaison_occcurences/Comparison_occurrences.pdf"), height = 8, width = 8)
+# Bar plot with customed categories
+obs_data_barplot <- obs_data
+obs_data_barplot$N.obs <- obs_data_barplot$N.obs %>%
+  cut(breaks = c(0, 6, 10, 30), right = F)
+obs_data_barplot %>% 
+  ggplot(aes(x = N.obs, fill = Type, color = Type)) + geom_bar(position = "dodge") +
+  geom_text(stat = 'count', aes(label = stat(count)), color = "black", nudge_y = 10)
+dev.off()
+
+table(list_occ$N.obs_used)
+
+scales::show_col(colors(), labels = FALSE)
+dev.off()
+
+```
+ 
+```{r}
+### 4/ Add initial_model_type ####
+
+# Decide of initial modeling type depending of the N.obs_used => Add a column for that "complete" (N >= 30), "restricted" (N > 5 et N < 30), "rasterized" (N > 6)
+# Threshold between "restricted" and "raserized" to decide afterwards regarding the evaluation metrics results. Still possible to discard low N.obs models even if they "succeeded"
+
+# Do it manually afterwards, because the loop must also run with resolution = 5m
+
+list_occ$initial_model_type <- NA
+for (i in 1:nrow(list_occ)) {
+  
+  N.obs <- list_occ$N.obs_used[i]
+  
+  if (N.obs < 6) {
+    list_occ$initial_model_type[i] <- "rasterized"
+    
+  } else {
+    
+    if (N.obs < 30) {
+      list_occ$initial_model_type[i] <- "restricted"
+      
+    } else {
+      list_occ$initial_model_type[i] <- "complete"
+      
+    }
+  }
+}
+
+save(list_occ, file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+
+```
+ 
+
+```{r}
+####Include MCRing to list_occ
+load("../input_data/occurences_df/list_occ_wt_modeletype.RData")
+
+
+Mimicry_rings <- read_excel("../Excels d'info/Mimicry-rings.xlsx")
+names(Mimicry_rings)<-c("fullname", "Mimicry_ring")
+list_occ<-merge(list_occ, Mimicry_rings, "fullname", all.x = T)
+
+##Manual for those with no photos
+  Manual_mimicry_add<- read.csv("Manual_mimicry_add.csv", header=T, sep=";")[,1:3]
+  list_occ<-merge(list_occ, Manual_mimicry_add, "fullname", all.x = T, all.y=F)
+  
+  for (i in 1:nrow(list_occ)) {
+    if(is.na(list_occ$Manual_ring[i])==FALSE){
+      list_occ$Mimicry_ring[i]<-list_occ$Ring[i]
+    }
+    else{list_occ$Manual_ring[i]<-FALSE}
+  }
+  
+list_occ<-subset(list_occ, select=-Ring)
+  #suppress those with no mimicry info    
+list_occ<-list_occ[is.na(list_occ$Mimicry_ring)==FALSE,]
+
+save(list_occ, file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+
+```
+ 
+ 

@@ -1,0 +1,193 @@
+---
+title: "28_IthovsHelico_rings_maps"
+author: "Eddie Pérochon"
+date: "2023-04-07"
+output: html_document
+---
+
+##### Script 28: Bivariate maps of habitat suitability for intertribes comimics#####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Plot habitat suitability for 3 comimetic groups of OMUs between Ithomiini & Heliconiini
+
+### Inputs
+
+# Heliconiini Mimicry ring maps from script 18
+# Ithomiini Mimicry ring maps from Doré et al. 2020 (Diversity & Distributions)
+
+###
+
+### Outputs
+
+#Maps of habitat suitability for intertribes comimics
+
+###
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+
+library(raster)
+library(stringr)
+library(dplyr)
+# library(rgeos)
+library(biscale)
+library(cowplot)
+library(sf)
+library(ggplot2)
+library(bivariatemaps)
+library(png)
+library(ape)
+# library(ggtree)
+library(phytools)
+library(TreeTools)
+
+
+```
+
+```{r}
+
+# New rings to plot: EXCELSA, PAVONII, MAELUS
+
+# names_v <- c( "MOTHONE", "MANTINEUS", "MAMERCUS")
+# names_clean <- c("MOTHONE habitat suitability", "MANTINEUS  habitat suitability", "MAMERCUS habitat suitability")
+# names_clean_lg <- c("MOTHONE\n habitat suitability", "MANTINEUS\n  habitat suitability", "MAMERCUS\n habitat suitability")
+
+names_v <- c( "EXCELSA", "PAVONII", "MAELUS")
+names_clean <- c("EXCELSA habitat suitability", "PAVONII  habitat suitability", "MAELUS habitat suitability")
+names_clean_lg <- c("EXCELSA\n habitat suitability", "PAVONII\n  habitat suitability", "MAELUS\n habitat suitability")
+
+HeIT_proba_ring <- readRDS("../input_data/Species_data/HeIt_ring_proba_stack_ss.RDS")
+
+shared_rings <- c("EURIMEDIA", "EXCELSA", "HERMIAS", "HUMBOLDT", "LYSIMNIA", "MAELUS", "MAMERCUS", "MOTHONE", "ORESTES", "PAVONII")
+
+ITHO_rings_all <- HeIT_proba_ring[[paste0(shared_rings, ".ITHO")]]
+pdf(file = "../maps/Shared_rings_Itho.pdf", height = 8, width = 12)
+plot(ITHO_rings_all)
+dev.off()
+
+HELICO_rings_all <- HeIT_proba_ring[[paste0(shared_rings, ".HELICO")]]
+pdf(file = "../maps/Shared_rings_Helico.pdf", height = 8, width = 12)
+plot(HELICO_rings_all)
+dev.off()
+
+ITHO_rings <- HeIT_proba_ring[[c("EXCELSA.ITHO", "PAVONII.ITHO", "MAELUS.ITHO")]]
+
+HEL_rings <- HeIT_proba_ring[[c("EXCELSA.HELICO", "PAVONII.HELICO", "MAELUS.HELICO")]]
+
+# Load mask for continent borders, plot border, and grid
+grid_Mollweide_out <- readRDS(file = "../input_data/Biogeographic_data/grid_Mollweide_out.rds")
+large_bg_mask_Mollweide <- readRDS(file = "../input_data/envData/crop_shape.RDS")
+bbox_sp_Mollweide <- readRDS(file = "../input_data/Biogeographic_data/bbox_sp_Mollweide.rds")
+sea_shp <- readRDS(file = "../input_data/Biogeographic_data/sea_shp.RDS")
+
+
+```
+
+
+```{r}
+
+### Generate bivariate legends
+
+# Load custom functions
+
+source("../functions/colmat_modified.R")
+source("../functions/biv_map_modified.R")
+source("../functions/custom_Bivariates_maps_mollweide.R")
+source("../functions/add_bivar_legend.R")
+
+for(i in 1:length(names_v))
+{
+names <- names_v[i]
+  
+  col.matrix <- colmat_modif(nquantiles=4, upperleft="#f3b300", upperright="#000000", bottomleft="#f3f3f3", bottomright="#509dc2", xlab=paste0(names, " Heliconiini habitat suitability"), ylab= paste0(names, "Ithomiini habitat suitability "), valuesx = HEL_rings[[i]], valuesy =  ITHO_rings[[i]])
+  
+   
+  bivmap <- biv_map_modified(HEL_rings[[i]], ITHO_rings[[i]], col.matrix, nquantiles = 4)
+  #   
+  assign(paste0(names_v[i], "_bivmap"), bivmap)
+  
+  #Add grey for 0x0 as last color
+  col.matrix_v <- as.vector(col.matrix)
+  col.matrix_v[ length(col.matrix) + 1] <-  "lightgrey" #"#DEE1EB"
+  
+  assign(paste0(names_v[i], "_colmat"), col.matrix)
+  assign(paste0(names_v[i], "_colv"), col.matrix_v)
+} 
+
+
+for(l in 1:3)
+{
+name_code <- names_v[l]
+col.matrix =   get(paste0(name_code, "_colmat"))
+
+scale_decimals <- 1 # General case, not possible to have more numbers so for big number, no decimals
+
+
+add_bivar_legend(rasterx = HEL_rings[[l]],
+                 rastery = ITHO_rings[[l]],
+                 color.matrix = col.matrix,
+                 nquantiles = 4,
+                 xlab = substitute(paste(bold("Heliconiini"))),
+                 ylab = substitute(paste(bold("Ithomiini"))),
+                 pngname = paste0("../maps/Map_legends/",name_code,"_Bivmap_legend.png"),
+                 scaledeci = scale_decimals)
+}                 
+
+
+
+
+```
+
+```{r}
+
+# Mollweide map, final plot
+
+
+pdf("../maps/BivarMap_rings.pdf", height = 4, width = 12)
+par(mar = c(3.1, 3.1, 2.7, 1.6))
+par(mfrow = c(1, 3))
+
+
+for (l in 1:3)
+{
+name_code <- names_v[l]
+main <- names_clean[l]
+name_clean_l <- names_clean_lg[l]
+
+map <- get(paste0(name_code, "_bivmap"))
+palette_bv <- unique(get(paste0(name_code, "_colv")))
+  
+ image(sea_shp,  col="#E1f1f1", #background
+         xlim = c(-5457, 4953), ylim = c(-4495, 5705), axes = F,
+         xlab = "", ylab = "")
+# Add background, borders and graticules
+  plot(bbox_sp_Mollweide, lwd = 2, border = "black", col = NA, legend=F, add = T)
+  plot(grid_Mollweide_out, lty = 92, col = "grey80",legend=F,  add = T)
+  par(new=TRUE)
+
+Bivar_map_Mollweide(x = map, color_palette = palette_bv, main_title = paste0(main), legend_title = name_clean_l, facet_letter = paste0("(",letters[l],")")) 
+plot(large_bg_mask_Mollweide, lwd = 1, col = "grey20", add = T)
+par(new=TRUE)
+
+legend_biv <- readPNG(source = paste0("../maps/Map_legends/",name_code,"_Bivmap_legend.png"))
+
+par(new = TRUE)
+rasterImage(legend_biv, xleft = -5500, ybottom = -4400, xright = -1000, ytop = 100)
+
+
+}
+dev.off()
+
+
+```

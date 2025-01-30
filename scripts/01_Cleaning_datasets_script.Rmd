@@ -1,0 +1,589 @@
+---
+title: "01_Cleaning_datasets"
+author: "Eddie PEROCHON"
+date: 01/2021-06/2021
+output: html_document
+---
+
+
+##### Script 01: Merge datasets and clean it #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+  # Merge the different occurrences datasets
+  # Clean taxonomy
+###
+
+
+### Inputs
+  # Occurrences datasets : N.Rosser, K.Kozak, Earthcape (C.Jiggins)
+###
+
+### Outputs
+  # Merged dataset, clean taxonomy
+###
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Prep envi, include= FALSE}
+rm(list = ls())
+setwd("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/")
+```
+
+
+```{r Packages, message=FALSE}
+library(dplyr)
+library(sf)
+library(raster)
+library(tidyr)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(stringr)
+library(readxl)
+library(xlsx)
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+
+```
+
+```{r Groupe des Heliconiini et fonctions}
+Heliconiini_group=c("Agraulis","Eueides","Philaethria","Podotricha","Dryadula","Dryas","Heliconius","Dione","Laparus","Neruda")
+
+Heliconiini_Fct <-function(y)
+  {
+y$Is_Heliconiini<-y$genus %in% Heliconiini_group
+return(y)
+  }
+
+```
+
+```{r fonction quand pas sur de la determination}
+
+Unsure_Fct<- function(x)
+{
+x$genus[is.na(x$genus)]<-""
+x$esp[is.na(x$esp)]<-""
+x$ssesp[is.na(x$ssesp)]<-""
+x$Sure<-NA
+for (i in 1:nrow(x))
+  {
+ 
+  if (( str_detect( x$esp[i] , "[?]" ) == FALSE ) &
+      ( str_detect( x$genus[i] , "[?]" ) == FALSE ) &
+      ( str_detect( x$ssesp[i] , "[?]" ) == FALSE ) )
+  
+  
+    {
+    x$Sure[i]<-TRUE
+    }
+  
+  else{
+      x$esp[i] <- str_replace( x$esp[i] , "[?]" , "" )
+      x$genus[i] <- str_replace( x$genus[i] , "[?]" , "" )
+      x$ssesp[i] <- str_replace( x$ssesp[i] , "[?]" , "" )
+      
+      x$Sure[i]<-FALSE
+      
+      }
+}
+return(x)
+}
+```
+
+```{r fonction pour diviser les hybrides en deux, warning=FALSE}
+Hybrid_fct<-function(z)
+{
+z$genus[is.na(z$genus)]<-""
+z$esp[is.na(z$esp)]<-""
+z$ssesp[is.na(z$ssesp)]<-""
+z$Is_hybrid<-FALSE
+
+for (i in 1:nrow(z)) {
+  
+
+if(str_detect(z$esp[i], " x ")==TRUE | str_detect(z$ssesp[i], " x " )==TRUE | str_detect(z$ssesp[i], " X " )==TRUE | str_detect(z$ssesp[i], "/" )==TRUE | str_detect(z$ssesp[i], "x" )==TRUE)
+  {z$Is_hybrid[i]<-TRUE}
+                    }
+
+z %>% 
+    separate_rows(ssesp, sep=" x ") %>%
+    separate_rows(esp, sep=" x ") %>%
+    separate_rows(ssesp, sep=" X ")%>%
+    separate_rows(ssesp, sep="/")%>%
+    separate_rows(ssesp, sep="X")
+}
+
+```
+
+```{r Fct coordonees GPS degre -> decimal}
+GPS_Fct<-function(x)
+{
+  x$D<-NA
+  x$MS<-NA
+  x$D2<-NA
+  x$MS2<-NA
+  for (i in 1:nrow(x))
+  {
+    if (str_detect(x$Lat[i], "N|S")==TRUE ) 
+      {
+      x$Lat[i]<-str_replace(x$Lat[i], "\'","")
+      x$Lat[i]<-str_replace(x$Lat[i], "N ", "N")
+      x$Lat[i]<-str_replace(x$Lat[i], " ", " ")
+      
+      x$D[i]<-str_split(x$Lat[i], " ", simplify = TRUE)[1]
+      x$MS[i]<-str_split(x$Lat[i], " ", simplify = TRUE)[2]
+      
+      x$MS[i]<-as.numeric(x$MS[i])/60
+      
+      x$Lon[i]<-str_replace(x$Lon[i], "\'","")
+      x$Lon[i]<-str_replace(x$Lon[i], "W ", "W")
+      x$Lon[i]<-str_replace(x$Lon[i], " ", " ")
+      
+      x$D2[i]<-str_split(x$Lon[i], " ", simplify = TRUE)[1]
+      x$MS2[i]<-str_split(x$Lon[i], " ", simplify = TRUE)[2]
+      
+      x$MS2[i]<-as.numeric(x$MS2[i])/60
+      }
+  } 
+  x$D<-str_replace(x$D, "N", "")
+  x$D<-str_replace(x$D, "S", "")
+  x$MS<-as.numeric(x$MS)
+  x$D<-as.numeric(x$D)
+  
+  x$D2<-str_replace(x$D2, "W", "")
+  x$MS2<-as.numeric(x$MS2)
+  x$D2<-as.numeric(x$D2)
+  
+  return(x)
+}
+
+GPS2FCT<-function(x)
+  {    
+  for(i in 1:nrow(x))
+    {
+    if(str_detect(x$Lat[i], "S")==TRUE )
+      {
+      x$Lat[i]<-sum(x$D[i],x$MS[i])*(-1)
+      x$Lon[i]<-sum(x$D2[i],x$MS2[i])*(-1)
+      }        
+    
+    else if (str_detect(x$Lat[i], "N")==TRUE )
+      {
+      x$Lat[i]<-sum(x$D[i],x$MS[i])
+      x$Lon[i]<-sum(x$D2[i],x$MS2[i])*(-1)
+      }
+    }
+  return(x)
+  }
+```
+
+
+```{r}
+Dataset_Fct<-function(a)
+  {
+  a$dataset_name<-deparse(substitute(a))
+  return(a)
+  }
+```
+
+
+```{r, Mise en forme dataset neil}
+    ###VERSION 1 DU DATASET####
+# neil <- read.csv("Heliconius locality records.csv" , sep="," , header=T ) 
+# neil$taxon_nombre[neil$taxon_nombre == "erato cf demophoon Heliconius" ]<- "erato demophoon Heliconius"
+# neil$taxon_nombre[neil$taxon_nombre == "no data" ] <- "melpomene Heliconius"
+# neil$taxon_nombre[neil$taxon_nombre == "nsp_Agraulis" ] <- "sp Agraulis"
+# 
+# neil = neil %>%
+#   separate( taxon_nombre ,  c( "esp" , "ssesp" , "genus" ), remove=FALSE, sep=" ")
+# 
+#       error_indices <- is.na(neil$genus)
+#       neil$genus[error_indices] <- neil$ssesp[error_indices]
+#       neil$ssesp[error_indices]<-NA
+#   
+#   neil$genus[neil$taxon_nombre=="nsp_Agraulis"]<-"Agraulis" 
+#   neil$genus[neil$taxon_nombre=="timata subsp. nov. Heliconius"]<-"Heliconius" 
+#   neil$species[neil$species=="nsp_Agraulis"]<-"sp"
+#   neil$genus[is.na(neil$genus)]<-"Heliconius"
+# 
+# neil<-Hybrid_fct(neil)
+# neil<-Unsure_Fct(neil)
+# neil<-Heliconiini_Fct(neil)
+# neil<-Dataset_Fct(neil)
+# 
+# neil$Sure[neil$ssesp=="ca_rosina"]<-FALSE
+
+    ###VERSION 2 DU DATASET###
+
+neil2 <- read.csv("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/Export _dat.csv" , sep=";" , header=T ) %>%
+ rename(
+    genus=Genus,
+    esp=species,
+    ssesp=subspecies)
+
+error_indices <- is.na(neil2$genus)
+neil2$genus[error_indices] <- neil2$ssesp[error_indices]
+neil2$ssesp[error_indices]<-NA
+
+neil2$genus[neil2$taxon_nombre=="nsp_Agraulis"]<-"Agraulis" 
+neil2$genus[neil2$taxon_nombre=="timata subsp. nov. Heliconius"]<-"Heliconius" 
+
+neil2<-Hybrid_fct(neil2)
+neil2<-Unsure_Fct(neil2)
+neil2<-Heliconiini_Fct(neil2)
+neil2<-Dataset_Fct(neil2)
+
+
+neil2$Sure[neil2$ssesp=="ca_rosina"]<-FALSE
+
+
+neil2=neil2[is.na(neil2$lat_dec)==FALSE,] %>%
+  unite("fullname", c(genus, esp ,ssesp), sep=" ", remove=FALSE)
+
+for (i in 1:nrow(neil2)) {
+  if(neil2$fullname[i]=="Heliconius timareta heurippa")
+  {
+    neil2$Is_hybrid[i]<-TRUE
+    neil2$fullname[i] <- "Heliconius timareta"
+    vec_correc2<-neil2[i,]
+    vec_correc2$fullname<-str_replace(vec_correc2$fullname, "Heliconius timareta", "Heliconius heurippa ")
+    neil2<-rbind(neil2,vec_correc2)
+  }
+}
+
+correctneil2<-read.csv("/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/correctneil2.csv", sep=";", header=T)
+
+
+
+neil2$lat_dec[neil2$localidad_codigo=="Km 48, Pimenta Bueno, Rondonia, Brasil"]<-(-11.68)
+neil2$lon_dec[neil2$localidad_codigo=="Km 48, Pimenta Bueno, Rondonia, Brasil"]<-(--61.183)
+neil2$lat_dec[neil2$localidad_codigo==" Km 48, Pimenta Bueno, Rondonia, Brasil"]<-(-11.68)
+neil2$lon_dec[neil2$localidad_codigo==" Km 48, Pimenta Bueno, Rondonia, Brasil"]<-(--61.183)
+
+neil2<-neil2[neil2$localidad_codigo!="no data",]
+    
+finalDB=neil2%>%
+  dplyr::select(fullname, genus, esp, ssesp, "Lat"=lat_dec, "Lon"=lon_dec, "Locality"=localidad_codigo, Sure, Is_Heliconiini, Is_hybrid, "Dataset"=dataset_name)
+
+```
+
+```{r Plot neil}
+# plot(x = neil2$lon_dec, y = neil2$lat_dec, , xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+# amerique_map <- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+# sp::plot(amerique_map, add = TRUE)
+```
+
+ 
+```{r Mise en forme dataset chris 2}
+Chris_2 <- read_excel("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/KKozak_collection_Nov2017_approximate_coords_Dore2020.xlsx")
+
+
+Chris_2$race<-str_replace_all(Chris_2$race, c("[?]hybrid"="" , "hydara x demophoon F1"="hydara x demophoon"))
+Chris_2=Chris_2 %>% 
+  rename(
+    esp=species,
+    ssesp=race)
+
+Chris_2<-Hybrid_fct(Chris_2)
+Chris_2<-Unsure_Fct(Chris_2)
+Chris_2<-Heliconiini_Fct(Chris_2)
+Chris_2<-Dataset_Fct(Chris_2)
+
+Chris_2 =Chris_2 %>%
+unite("fullname", c(genus, esp ,ssesp), sep=" ", remove=FALSE, na.rm=TRUE)
+
+Chris_2$long[Chris_2$long==-8076690]<-80.76690
+Chris_2$fullname[Chris_2$fullname=="Dryas julia "]<-"Dryas iulia"
+
+FDB3=Chris_2%>%
+  dplyr::select(fullname, genus, esp, ssesp, "Lat"=lat, "Lon"=long, "Locality"=locality, Sure, Is_Heliconiini, Is_hybrid, "Dataset"=dataset_name)
+finalDB<-rbind(finalDB,FDB3)
+
+```
+ 
+```{r plot Chris 2}
+plot(x = Chris_2$long, y = Chris_2$lat , xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+chris2_map <- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(chris2_map, add = TRUE)
+```
+ 
+ 
+```{r Mise en forme dataset chris Itho&Helico}
+Chris_Ito_Helico <- read_excel("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/STRI_McMillan_2016_Heliconiini_Ithomiinae.xlsx") %>%
+  rename(
+    genus=Genus,
+    esp=Species,
+    ssesp="Subspecies 1") %>%
+  unite("Locality",'Collecting Location':'Collecting Specific Location', sep= " ", remove =FALSE)
+Chris_Ito_Helico$genus[Chris_Ito_Helico$genus=="Philaetria"]<-"Philaethria"
+Chris_Ito_Helico$genus[Chris_Ito_Helico$genus=="Neurda"]<-"Neruda"
+Chris_Ito_Helico$genus[Chris_Ito_Helico$`Taxonomic ID`=="Neruda aoede"]<-"Neruda"
+Chris_Ito_Helico$esp[Chris_Ito_Helico$`Taxonomic ID`=="Neruda aoede"]<-"aoede"
+Chris_Ito_Helico$esp[Chris_Ito_Helico$esp=="cydno × melpomene"]<-"cydno x melpomene"
+
+Chris_Ito_Helico<- Hybrid_fct(Chris_Ito_Helico) 
+Chris_Ito_Helico<- Unsure_Fct(Chris_Ito_Helico)
+Chris_Ito_Helico<- Heliconiini_Fct(Chris_Ito_Helico)
+Chris_Ito_Helico<- Dataset_Fct(Chris_Ito_Helico)
+
+Chris_Ito_Helico=Chris_Ito_Helico[is.na(Chris_Ito_Helico$Latitude)==FALSE,] %>%
+unite("fullname", c(genus, esp ,ssesp), sep=" ", remove=FALSE)
+
+Chris_Ito_Helico$fullname[Chris_Ito_Helico$`Taxonomic ID`=="Heliconius (ismenius boulleti x hecale melicerta)"] <- "Heliconius ismenius boulleti"
+vec_correc<-Chris_Ito_Helico[Chris_Ito_Helico$`Taxonomic ID`=="Heliconius (ismenius boulleti x hecale melicerta)",]
+vec_correc$fullname<-str_replace(vec_correc$fullname, "Heliconius ismenius boulleti", "Heliconius hecale melicerta")
+  Chris_Ito_Helico<-rbind(Chris_Ito_Helico,vec_correc)
+
+FDB4=Chris_Ito_Helico%>%
+  dplyr::select(fullname, genus, esp, ssesp, "Lat"=Latitude, "Lon"=Longitude, Locality, Sure, Is_Heliconiini, Is_hybrid, "Dataset"=dataset_name)
+finalDB<-rbind(finalDB,FDB4)
+
+```
+
+```{r}
+plot(x = Chris_Ito_Helico$Longitude, y = Chris_Ito_Helico$Latitude , xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+chris2_map <- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(chris2_map, add = TRUE)
+```
+ 
+
+```{r RECUP DE DONNEES GPS VIA CODE SOURCE}
+writeLines(iconv(readLines("Localities_str_file_by_cells.txt"), from = "ISO-8859-1", to = "UTF-8", sub="Unicode"), "lstrfile2.txt")
+Loc_Earth_Helico<-read.table("Localities_str_file_by_cells.txt", sep="}", encoding = "unknown")
+Twist_LOCEH<-as.data.frame(t(Loc_Earth_Helico))%>%
+  separate(V1, c("title", "other"), sep="latitude:") %>%
+  separate(other, c("latitude1", "other"), sep="longitude:", remove = TRUE)%>%
+  separate(other, c("longitude1", "other"), sep="id", remove = TRUE) %>%
+  separate(title, c("r","s","t", "Locality","u"), sep="\"")%>%
+  separate(Locality, c("Locality","v"), sep=",latitude") %>%
+  separate(u, c("x", "y"), sep="longitude:")%>%
+  separate(y, c("longitude2", "z"), sep="id:", remove = TRUE) %>%
+  separate(x, c("a", "latitude2"), sep=":", remove = TRUE)
+
+Twist_LOCEH$latitude1<-as.numeric(Twist_LOCEH$latitude1)
+Twist_LOCEH$latitude2<-as.numeric(Twist_LOCEH$latitude2)
+Twist_LOCEH$longitude1<-as.numeric(Twist_LOCEH$longitude1)
+Twist_LOCEH$longitude2<-as.numeric(Twist_LOCEH$longitude2)
+
+
+Twist_LOCEH$Lat<-rowSums(Twist_LOCEH[,c("latitude1","latitude2")],na.rm=TRUE)
+Twist_LOCEH$Long<-rowSums(Twist_LOCEH[,c("longitude1","longitude2")],na.rm=TRUE)
+
+Loc_Earth_Helico=Twist_LOCEH%>%
+  dplyr::select(Locality, Lat, Long)
+
+
+
+```
+
+```{r Localities Earthcape}
+LocalEarthcape<-read.csv("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/Localities.csv", sep=";", header=T, encoding = "unknown")
+```
+
+
+```{r Dataset earthcape}
+zone_correction <- read.csv("C:/Users/eddie/Desktop/Stage M2/Stage/Stage-Heliconiini/zone correction.csv", sep=";")
+
+Earthcape<-read.csv("Units.csv", sep=";", header=T, encoding = "unknown")
+Earthcape<-Earthcape[Earthcape$TaxonomicName!="",]%>%
+  rename(fullname=TaxonomicName,
+         subdataset=Dataset)%>%
+  separate(fullname, c("genus", "esp", "ssp", "ssesp"), sep=" ", remove=FALSE)
+
+  Earthcape<-Hybrid_fct(Earthcape)
+  Earthcape<-Unsure_Fct(Earthcape)
+  Earthcape<-Heliconiini_Fct(Earthcape)
+  Earthcape<-Dataset_Fct(Earthcape)
+  
+  Earthcape$Last_correct<-NA
+  
+  Earthcape$ssesp[Earthcape$ssesp=="Hybrid"]<-"" #pas d'info sur parent 2 donc on garde juste parent 1
+  Earthcape$Is_hybrid[Earthcape$ssesp=="Hybrid"]<-TRUE
+  Earthcape$ssp[is.na(Earthcape$ssp)==TRUE]<-""
+
+  
+  Earthcape<-Earthcape[Earthcape$Is_Heliconiini!=FALSE,]%>%
+    unite("fullname", c("genus","esp","ssesp"), sep=" ", remove=FALSE, na.rm=TRUE) 
+  
+  for (i in 1:nrow(Earthcape)) {
+  if(Earthcape$ssp[i]=="x" & Earthcape$Is_Heliconiini[i]==TRUE)
+  {
+  Earthcape$Is_hybrid[i]<-TRUE
+  Earthcape$fullname[i] <- "Heliconius cydno"
+vec_correc2<-Earthcape[i,]
+  vec_correc2$fullname<-str_replace(vec_correc2$fullname, "Heliconius cydno", "Heliconius melpomene")
+  Earthcape<-rbind(Earthcape,vec_correc2)
+  }
+                             }
+    
+Earthcape$Latitude <- str_replace(Earthcape$Latitude, "," , "\\.")
+Earthcape$Longitude <- str_replace(Earthcape$Longitude, "," , "\\." )
+
+ for (i in 1:nrow(Earthcape))
+  {
+   if(Earthcape$Latitude[i]==0 & sum(match(Earthcape$Locality[i], Loc_Earth_Helico$Locality), na.rm=TRUE)>0) #coodonnees issues du code source de la page 
+    {
+     nb<-sum(match(Earthcape$Locality[i], Loc_Earth_Helico$Locality), na.rm=TRUE)
+     Earthcape$Latitude[i]<-Loc_Earth_Helico$Lat[nb]
+     Earthcape$Longitude[i]<-Loc_Earth_Helico$Long[nb]
+   }
+    else { if(Earthcape$Latitude[i]==0 & sum(match(Earthcape$Locality[i], LocalEarthcape$Name), na.rm=TRUE)>0)  #coordonnees issues du fichier localities
+    {
+    nb2<-sum(match(Earthcape$Locality[i], LocalEarthcape$Name), na.rm=TRUE)
+     Earthcape$Latitude[i]<-LocalEarthcape$Latitude[nb2]
+     Earthcape$Longitude[i]<-LocalEarthcape$Longitude[nb2]
+    }
+        }
+ }
+
+for (i in 1:nrow(Earthcape)) {
+  
+if(Earthcape$Latitude[i]==0 & sum(match(Earthcape$Locality[i], zone_correction$LOC), na.rm=TRUE)>0) #coordonnees issues dune correction a la main via geographical gazetters
+   {
+    nb3<-sum(match(Earthcape$Locality[i], zone_correction$LOC), na.rm=TRUE)
+     Earthcape$Latitude[i]<-zone_correction$Lat[nb3]
+     Earthcape$Longitude[i]<-zone_correction$Long[nb3]
+
+     Earthcape$Last_correct[i]<-TRUE
+    }
+  
+   # else { if(Earthcape$Latitude[i]==0 & sum(match(Earthcape$Locality[i], Earthcape$Locality), na.rm=TRUE)>0) #coordonnees du jeu de donnees car parfois elles ne sont pas rentrees pour des localites similaires
+   #  {
+   #   good_loc<-Earthcape[Earthcape$Latitude!=0, c(7,10,11)]
+   #   np2<-match(good_loc$Locality, Earthcape$Locality[i])
+   #    np2[is.na(np2)]<-0
+   # 
+   #      for(j in 1:length(np2))
+   #      {
+   #        if(np2[j]==1)
+   #        {
+   #   Earthcape$Latitude[i]<-good_loc$Latitude[j]
+   #   Earthcape$Longitude[i]<-good_loc$Longitude[j]
+   #   np2<-rep(0, length(np2))
+   #        }
+   #      }
+   #  }
+   # } commenté car n'apporte pas de donnees supplémentaires
+}
+
+Earthcape$Latitude<-str_replace(string= Earthcape$Latitude, pattern = ",$" , replacement= "")
+Earthcape$Latitude<-str_replace(string= Earthcape$Latitude, pattern = "," , replacement= ".")
+Earthcape$Longitude<-str_replace(string= Earthcape$Longitude, pattern = "," , replacement= ".")
+  
+FDB6=Earthcape[Earthcape$Latitude!=0,]%>%
+   dplyr::select(fullname, genus, esp, ssesp, "Lat"=Latitude, "Lon"=Longitude, Locality, Sure, Is_Heliconiini, Is_hybrid, "Dataset"=dataset_name)
+ finalDB<-rbind(finalDB,FDB6)
+```
+
+
+```{r Dataset earthcape}
+plot(x = FDB6$Lon, y = FDB6$Lat , xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+chris2_map <- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(chris2_map, add = TRUE)
+```
+```{r Mise en forme dataset chris Suriname}
+Chris_suriname<-read_excel("Kozak_Suriname_Specimens.xlsx", skip=1)
+Chris_suriname$species[is.na(Chris_suriname$species)]<-"sp"
+Chris_suriname$race<-replace_na(Chris_suriname$race, "")
+Chris_suriname$Genus[Chris_suriname$Genus=="Draydula"]<-"Dryadula"
+Chris_suriname=Chris_suriname %>% 
+  rename(
+    genus=Genus,
+    esp=species,
+    ssesp=race)
+Chris_suriname<- Hybrid_fct(Chris_suriname) 
+Chris_suriname<- Unsure_Fct(Chris_suriname)
+Chris_suriname<- Heliconiini_Fct(Chris_suriname)
+Chris_suriname<- Dataset_Fct(Chris_suriname)
+
+Chris_suriname=Chris_suriname%>%
+unite("fullname", c(genus, esp ,ssesp), sep=" ", remove=FALSE, na.rm=TRUE)
+
+FDB2=Chris_suriname%>%
+  dplyr::select(fullname, genus, esp, ssesp, Lat, "Lon"=Long, Locality, Sure, Is_Heliconiini, Is_hybrid, "Dataset"=dataset_name)
+finalDB<-rbind(finalDB,FDB2)
+
+```
+ 
+```{r Plot Chris Suriname}
+# plot(x = Chris_suriname$Long, y = Chris_suriname$Lat , xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+# suriname_map <- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+# sp::plot(suriname_map, add = TRUE)
+``` 
+
+
+```{r}
+finalDB$esp[finalDB$esp==""&finalDB$genus!=""]<-"sp" 
+finalDB<-GPS_Fct(finalDB)
+finalDB<-GPS2FCT(finalDB)
+finalDB$Lat<-as.numeric(finalDB$Lat)
+finalDB$Lon<-as.numeric(finalDB$Lon)
+finalDB<-finalDB[finalDB$fullname!="Heliconius melpomene dignus",]
+finalDB<-finalDB[finalDB$fullname!="Heliconius melpomene dignus",]
+ finalDB$fullname[finalDB$fullname=="Heliconius erato amalfeda"]<-"Heliconius erato amalfreda"
+
+taxalist_final <- read.csv("taxalist_final.csv", sep=";")
+
+
+
+for (i in 1:nrow(finalDB)) 
+  {
+  if (sum(match(taxalist_final$fullname,finalDB$fullname[i]), na.rm=T)>0)
+    {
+    nb<-sum(match(finalDB$fullname[i], taxalist_final$fullname), na.rm = T)
+    finalDB$fullname[i]<-taxalist_final$correction[nb]
+    finalDB$taxa_corrected[i]<-TRUE
+    }
+  else {finalDB$taxa_corrected[i]<-FALSE}
+}
+
+for (i in 1:nrow(finalDB)) 
+{
+  if (sum(match(correctneil2$fullname,finalDB$fullname[i]), na.rm=T)>0)
+  {
+    nb<-sum(match(finalDB$fullname[i], correctneil2$fullname), na.rm = T)
+    finalDB$fullname[i]<-correctneil2$correction[nb]
+    finalDB$taxa_corrected[i]<-TRUE
+  }
+}
+
+#finalDB<-finalDB[finalDB$fullname!="",]
+
+```
+
+```{r}
+plot(x = finalDB$Lon, y = finalDB$Lat, xlab="Longitude", ylab="Latitude",   pch = 16, cex = .2, col="red")
+bigmap<- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(bigmap, add = TRUE)
+
+
+```
+
+```{r}
+plot(x = finalDB$Lon, y = finalDB$Lat, xlab="Longitude", ylab="Latitude", xlim=c(-140,-30), ylim=c(-40,40), pch = 16, cex = 0.1, col=c("red", "green", "blue", "purple", "orange")[factor(finalDB$Dataset)])
+bigmap<- ne_countries(scale = 50, type="countries", returnclass = "sp") #on ajoute les limites des pays
+sp::plot(bigmap, add = TRUE)
+legend(-135, -5, legend=c("Chris_2" , "Chris_Ito_Helico", "Chris_suriname", "Earthcape", "neil"), col=c("red", "green", "blue", "purple", "orange"), cex=0.8, pch=16)
+
+```
+
+```{r}
+finalDB$Locality<-str_replace(finalDB$Locality, ",", " ")
+ 
+finalDB=finalDB%>%
+  separate(fullname, c("genus", "esp", "ssesp"), sep="[:space:]", remove=FALSE, extra="merge") %>%
+  dplyr::select(c(1:11, 16))
+
+write.table(finalDB, "finalDB.csv", sep=";")
+```
+

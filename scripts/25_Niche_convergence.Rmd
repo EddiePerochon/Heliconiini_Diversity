@@ -1,0 +1,1215 @@
+---
+title: "25_Niche_convergence"
+author: "Eddie Pérochon"
+date: "18/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 25: Test fit of Evolutionary models, test for mean Climatic distance #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+
+# Fit the best neutral evolutionary models
+# Test for convergence in the climatic niche via mean climatic distance of comimics
+ 
+
+### Inputs
+
+# Summary tables of species and OMUs, included in the phylogeny or not
+# Phylogeny of Heliconiini with and without OMUs
+# pPCA climatic values of the species and OMUS
+
+
+###
+
+### Outputs
+
+# Summary table for evolutionary models fit to the climatic data, for the 4 bioclimatic variables, and in the pPCA-space (2 axis)
+# Best evolutionary model and its parameters
+# Simulated values for the OMUs in the pPCA-space following the best evolutionnary model
+# Comimcry matrix for the OMUs
+# Global MCD for comimics, and per mimicry rings + null distribution
+# Plot null distribution for test of MCD, global and per mimicry ring
+
+###
+
+
+
+```{r}
+# Clean environment
+rm(list = ls())
+
+library(devtools)
+
+# install.packages(pkgs = "../input_data/packages/RRPP_1.4.0.tar.gz", repos = NULL, type = "source")
+# install.packages(pkgs = "../input_data/packages/geomorph_3.3.2.tar.gz", repos = NULL, type = "source")
+# install_github("ericgoolsby/phylocurve")
+
+library(motmot)
+library(raster)
+library(phylocurve)
+library(phytools)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+
+```
+
+```{r}
+### 0/ Phylogeny with OMU
+
+##### Build a phylogeny including the OMUs on null distance terminal branches ####
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+# Load table of ssp with occurrence data  
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"))
+
+# Extract list of OMU and species
+list_OMU <- data.frame(OMU = unique(list_occ[,paste0("OMU_", m)]))
+
+# load(file = paste0("../input_data/useful_vectors/list_species.RData"))
+
+# list_OMU <- list_OMU %>%
+#   separate(OMU, c("species", "ring"), sep = "[.]", remove = FALSE)
+
+list_OMU$species <- paste0(str_split(string = list_OMU$OMU, pattern = "\\.", simplify = T)[,1], "_", str_split(string = list_OMU$OMU, pattern = "\\.", simplify = T)[,2])
+list_OMU$ring <- str_split(string = list_OMU$OMU, pattern = "\\.", simplify = T)[,3]
+list_species <- unique(list_OMU$species)
+  
+## Prepare backbone phylogeny
+
+# Load species level phylogeny from Kozak et al., 2015, with divergence ages updated using priors from Chazot et al., 2019 
+Phylo_Helico_initial <- read.tree(file = "../input_data/phylogenies/Heliconiini_Chazot2019priors/Heliconiini_Chazot2019priors.MCC.median_ages.no_annotations.tree")  
+
+# Remove subspecies
+Phylo_Helico_updated <- Phylo_Helico_initial
+Phylo_Helico_updated <- drop.tip(phy = Phylo_Helico_updated, tip = "Heliconius_erato_favorinus")
+Phylo_Helico_updated <- drop.tip(phy = Phylo_Helico_updated, tip = "Heliconius_erato_petiverana")
+Phylo_Helico_updated <- drop.tip(phy = Phylo_Helico_updated, tip = "Heliconius_melpomene_plesseni")
+Phylo_Helico_updated <- drop.tip(phy = Phylo_Helico_updated, tip = "Heliconius_melpomene_rosina")
+
+# Update taxa names
+Phylo_Helico_updated$tip.label[Phylo_Helico_updated$tip.label == "Heliconius_cydno_cordula"] <- "Heliconius_cydno"
+Phylo_Helico_updated$tip.label[Phylo_Helico_updated$tip.label == "Heliconius_erato_erato"] <- "Heliconius_erato"
+Phylo_Helico_updated$tip.label[Phylo_Helico_updated$tip.label == "Heliconius_melpomene_melpomene"] <- "Heliconius_melpomene"
+
+# Remove outgroups and missing taxa
+No_occ_taxa <- Phylo_Helico_updated$tip.label[!(Phylo_Helico_updated$tip.label %in% list_species)]
+Phylo_Helico_updated <- drop.tip(phy = Phylo_Helico_updated, tip = No_occ_taxa)
+
+# Save updated phylogeny
+saveRDS(object = Phylo_Helico_updated, file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+
+## Load updated phylogeny
+
+phylo_helico <- readRDS(file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+# load(file = paste0("../input_data/phylogenies/Final_phylogeny.RData"))
+
+# Remove OMU from species that are not in the phylogeny
+unmatch <- setdiff(list_OMU$species, phylo_helico$tip.label)
+  
+list_OMU_clean = subset(list_OMU, !(species %in% unmatch))
+list_species_clean = subset(list_species, !(list_species %in% unmatch))
+# list_species_clean = list_species_clean[list_species_clean!="Agraulis_sp.nov"]
+
+# Save cleaned list_OMU
+saveRDS(list_OMU_clean, file = paste0("../input_data/occurences_df/list_OMU_clean_",m,".rds"))
+saveRDS(list_species_clean, file = paste0("../input_data/occurences_df/list_species_clean_",m,".rds"))
+
+
+phylo_helico.units <- phylo_helico
+
+# Add units tips
+
+for (i in 1:nrow(list_OMU_clean)) {
+  unit <- list_OMU_clean[i,]
+  sp.nod <- which(phylo_helico.units$tip.label == unit$species)
+  sp.edge <- which(phylo_helico.units$edge[,2] == sp.nod)
+  phylo_helico.units <- bind.tip(tree = phylo_helico.units, tip.label = as.character(unit$OMU),
+                                    edge.length = 0,
+                                    where = sp.nod,
+                                    position = 0)
+  if (i %% 10 == 0) {print(i)}
+}
+# Remove species tips
+?drop.tip
+for (i in 1:length(list_species_clean)) {
+  sp <- list_species_clean[i]
+  phylo_helico.units <- drop.tip(phy = phylo_helico.units, tip = sp)
+  if (i %% 10 == 0) {print(i)}
+}
+
+# phylo_helico.units$tip.label
+# plot(phylo_helico.units)
+
+save(phylo_helico.units, file = paste0("../input_data/phylogenies/Final_OMU_phylogeny_",m,".RData"))
+write.nexus(phylo_helico.units, file = paste0("../input_data/phylogenies/Final_OMU_phylogeny_",m,".nex"), translate = F)  
+
+# Reorder list.unit following Phylogeny to match rows in the phenetic distance matrix with env data in the summary table
+order.index <- NA
+for (i in 1:length(phylo_helico.units$tip.label)) {
+  unit <- as.character(phylo_helico.units$tip.label[i])
+  order.index[i] <- which(list_OMU_clean$OMU==unit)
+}
+
+list.unit_phyl_order <- list_OMU_clean[order.index,]
+row.names(list.unit_phyl_order) <- as.character(list.unit_phyl_order$OMU)
+save(list.unit_phyl_order, file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+
+pdf(paste0("../input_data/phylogenies/phylo_OMU_",m,".pdf"), height=16, width=7)
+ape::plot.phylo(phylo_helico.units)
+dev.off()
+
+}
+
+```
+
+```{r}
+
+### Update occurrence dataset with new phenotypic/mimicry classification ####
+
+# Load updated classification
+mimicry_classif_df <- readRDS("../input_data/update_2024/newclassif.RDS")
+
+# Load occurrence data set
+load("../input_data/occurences_df/Occ_MW.RDATA")
+Occ_df <- Occ_MW@data
+
+## Update mimicry rings/phenotypic groups
+
+# For ss
+Occ_df$Ring_ss <- NA
+Occ_df$Ring_ss <- mimicry_classif_df$New_Phenotypic_group[match(x = Occ_df$code_unit, table = mimicry_classif_df$Taxon_name)]
+# For sl
+Occ_df$Ring_sl <- NA
+Occ_df$Ring_sl <- mimicry_classif_df$Super_groups[match(x = Occ_df$code_unit, table = mimicry_classif_df$Taxon_name)]
+
+## Deal with special cases not in the mimicry classif
+Occ_df$code_unit[!(Occ_df$code_unit %in% mimicry_classif_df$Taxon_name)]
+
+# For ss
+Occ_df$Ring_ss[Occ_df$code_unit == "Agraulis_sp.nov"] <- "VANILLAE"
+Occ_df$Ring_ss[Occ_df$code_unit == "Dione_juno_suffumata"] <- "VANILLAE"
+Occ_df$Ring_ss[Occ_df$code_unit == "Dione_moneta_moneta"] <- "VANILLAE"
+Occ_df$Ring_ss[Occ_df$code_unit == "Heliconius_demeter_subsp._nov."] <- "THELXIOPE"
+Occ_df$Ring_ss[Occ_df$code_unit == "Podotricha_judith_straminea"] <- "DERCYLLIDAS"
+# For sl
+Occ_df$Ring_sl[Occ_df$code_unit == "Agraulis_sp.nov"] <- "VANILLAE_largo"
+Occ_df$Ring_sl[Occ_df$code_unit == "Dione_juno_suffumata"] <- "VANILLAE_largo"
+Occ_df$Ring_sl[Occ_df$code_unit == "Dione_moneta_moneta"] <- "VANILLAE_largo"
+Occ_df$Ring_sl[Occ_df$code_unit == "Heliconius_demeter_subsp._nov."] <- "RICINI_largo"
+Occ_df$Ring_sl[Occ_df$code_unit == "Podotricha_judith_straminea"] <- "DERCYLLIDAS_largo"
+
+
+## Update OMU
+# For ss
+Occ_df$OMU_ss <- paste0(Occ_df$genus, ".", Occ_df$esp, ".", Occ_df$Ring_ss)
+# For sl
+Occ_df$OMU_sl <- paste0(Occ_df$genus, ".", Occ_df$esp, ".", Occ_df$Ring_sl)
+
+   
+## Check that all taxa in phylogeny have occurrence data
+# For ss
+load(file = paste0("../input_data/phylogenies/Final_OMU_phylogeny_ss.RData")) # Load grafted phylo
+table(Occ_df$OMU_ss %in% phylo_helico.units$tip.label)
+phylo_helico.units$tip.label[!(phylo_helico.units$tip.label %in% Occ_df$OMU_ss)]
+# For sl
+load(file = paste0("../input_data/phylogenies/Final_OMU_phylogeny_sl.RData")) # Load grafted phylo
+table(Occ_df$OMU_sl %in% phylo_helico.units$tip.label)
+phylo_helico.units$tip.label[!(phylo_helico.units$tip.label %in% Occ_df$OMU_sl)]
+
+# Bind coordinates in Mollweide CRS
+Occ_df <- cbind(Occ_df, Occ_MW@coords) %>% 
+  rename(longitude_MW = longitude)  %>% 
+  rename(latitude_MW = latitude)
+
+# Save Occ df
+save(Occ_df, file = "../input_data/occurences_df/Occ_MW_df.RData")
+
+
+```
+
+
+```{r}
+
+## Env stacks
+
+# Load stack of environmental variables used in SDM
+load("../input_data/envData/Envstack.RData")
+names(Var_stack_final)
+
+# Load Occ df
+load("../input_data/occurences_df/Occ_MW.RDATA")
+load(file = "../input_data/occurences_df/Occ_MW_df.RData")
+
+# Extract environmental data per occurrences
+for (i in 1:nlayers(Var_stack_final))
+{
+  Occ_df <- cbind(Occ_df, raster::extract(Var_stack_final[[i]], Occ_MW@coords))
+  names(Occ_df)[names(Occ_df) == "raster::extract(Var_stack_final[[i]], Occ_MW@coords)"] <- names(Var_stack_final)[i]  
+}
+
+# Save Occ df
+save(Occ_df, file = "../input_data/occurences_df/Occ_MW_df.RData")
+
+
+### Compute environmental centroids per species ####
+
+# Load Occ df
+load(file = "../input_data/occurences_df/Occ_MW_df.RData")
+
+# Remove occ with NA
+# Occ_df <- Occ_df[is.na(Occ_df$bio1) == FALSE, ]
+
+Occ_df$species <- str_split_fixed(Occ_df$OMU_ss, "[.][:upper:]", n = 2)[, 1]
+
+# wt_OMU <- c()
+# for(i in 1:nrow(Occ_df))
+# {
+#   wt_OMU[i] <- sum(match(Occ_df$OMU_ss, Occ_df$OMU_ss[i]), na.rm = T)
+# }
+# 
+# Occ_df$wt_OMU<-wt_OMU
+# 
+# Env_species_df <- Occ_df %>%
+#   dplyr::group_by(species) %>% 
+#   summarise(weighted_bio1 = weighted.mean(bio1, wt_OMU),  weighted_bio2 = weighted.mean(bio2, wt_OMU), weighted_bio12 = weighted.mean(bio12, wt_OMU),weighted_bio15 = weighted.mean(bio15, wt_OMU))
+
+Env_species_df <- Occ_df %>%
+  dplyr::group_by(species) %>% 
+  # summarise(bio1 = mean(bio1, na.rm = T), bio2 = mean(bio2, na.rm = T), bio12 = mean(bio12, na.rm = T), bio15 = mean(bio15, na.rm = T), elev = mean(elev, na.rm = T), forest = mean(forest, na.rm = T))
+  summarise(mean_bio1 = mean(bio1, na.rm = T), mean_bio2 = mean(bio2, na.rm = T), mean_bio12 = mean(bio12, na.rm = T), mean_bio15 = mean(bio15, na.rm = T))
+
+save(Env_species_df, file = "../input_data/Species_data/Env_species_df.RData")
+
+
+### Compute environmental centroids per OMU ####
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+unit_env_table <- Occ_df %>%
+  dplyr::group_by(eval(parse(text = paste0("OMU_",m)))) %>% 
+  summarise(mean_bio1 = mean(bio1, na.rm = T), mean_bio2 = mean(bio2, na.rm = T), mean_bio12 = mean(bio12, na.rm = T), mean_bio15 = mean(bio15, na.rm = T))
+names(unit_env_table)[1] <- paste0("OMU_",m)
+
+save(unit_env_table, file = paste0("../input_data/Species_data/unit_env_table_",m,".Rdata"))
+
+}
+
+```
+
+
+```{r}
+##### 1/ Load stuff  #####
+
+### Load phylogenies, sp list and unit list for evolutionary models and MCD analyses (include all species in the phylogeny)
+
+# Load species phylogeny
+phylo_helico <- readRDS(file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+
+# Load species niche centroids
+load(file = paste0("../input_data/Species_data/Env_species_df.RData"))
+
+# Reorder species env data to keep only the one in the phylogeny
+
+phylo_helico$tip.label <- str_replace_all(phylo_helico$tip.label, "_", ".")
+
+Env_species_df$species[!Env_species_df$species %in% phylo_helico$tip.label]
+
+Env_species_df <- Env_species_df[match(phylo_helico$tip.label, Env_species_df$species), ]
+
+identical(phylo_helico$tip.label, Env_species_df$species)
+
+# Save species niche centroids
+save(Env_species_df, file = paste0("../input_data/Species_data/Env_species_df_for_phylo.RData"))
+# Save species phylogeny with updated labels
+saveRDS(phylo_helico, file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+# Load cleaned list of OMU
+load(file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+
+# Load grafted phylogeny
+load(file = paste0("../input_data/phylogenies/Final_OMU_phylogeny_",m,".RData"))
+
+# Check that list of OMUs are identical to tip labels
+identical(phylo_helico.units$tip.label, list.unit_phyl_order$OMU)
+
+}
+
+```
+
+```{r}
+
+##### 2/ Test fit of evolutionary models #####
+
+## Carried out at species level because models need to be able to inverse the patristic distance matrix from the phylogenetic tree (no terminal null branch allowed)
+
+# Load species phylogeny
+phylo_helico <- readRDS(file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+
+# Load species niche centroids
+load(file = paste0("../input_data/Species_data/Env_species_df_for_phylo.RData"))
+
+### 2.1/ On the 4 climatic variables ####
+
+# install.packages(pkgs = "../packages/motmot.2.0_1.1.2.tar.gz", type = "source")
+
+?transformPhylo.ML
+
+sp_env_mat <- as.matrix(Env_species_df[,-1]) ; row.names(sp_env_mat) <- Env_species_df$species
+
+# Create summary table for evolutionary models comparison
+Evol_mods_summary_df_4var <- data.frame(Model = character(), Likelihood = numeric(), AICc = numeric(), lambda = numeric(), kappa = numeric())
+Evol_mods_summary_df_4var$Model <- as.character(Evol_mods_summary_df_4var$Model)
+
+# Brownian Motion model (neutral evolution with phylogenetic signal)
+bm.ml <- transformPhylo.ML(phy = phylo_helico, y = sp_env_mat, model = "bm")
+bm.ml
+Evol_mods_summary_df_4var[1,] <-  c("BM", round(bm.ml$logLikelihood, 3), round(bm.ml$AICc, 3), NA, NA)
+
+# Pagel's lambda model (modulate phylogenetic signal)
+lambda.ml <- transformPhylo.ML(phy = phylo_helico, y = sp_env_mat, model = "lambda", profilePlot=T)
+lambda.ml
+Evol_mods_summary_df_4var[2,] <-  c("Lambda", round(lambda.ml$MaximumLikelihood, 3), round(lambda.ml$AICc, 3), round(lambda.ml$Lambda[1,1],3), NA)
+p.value <- 1 - pchisq(2*(lambda.ml$MaximumLikelihood - bm.ml$logLikelihood), 1) ; p.value
+bm.ml$AICc - lambda.ml$AICc
+
+# # Univariate Pagel's lambda for information
+# var <- "weighted_bio1"
+# var <- "weighted_bio2"
+# var <- "weighted_bio12"
+# var <- "weighted_bio15"
+# 
+# univariate_test <- as.matrix(Env_species_df[,var]) ; row.names(univariate_test) <-  Env_species_df$species
+# lambda.ml_univ <- transformPhylo.ML(phy = phylo_helico, y = univariate_test, model = "lambda", profilePlot=T)
+# lambda.ml_univ 
+# 
+# # Phylogenetic signal in most variables
+# 
+# # Test for phylogenetic signal based on Pagel's lambda
+# tree0 <- transformPhylo(phy = phylo_helico, model = "lambda", y = sp_env_mat, lambda = 0) # Get the transformed tree with Pagel's lambda = 0
+# lambda0.ml <- transformPhylo.ML(phy = tree0, y = sp_env_mat, model = "bm") # Estimate best model on BM on transformed tree
+# p.value <- 1 - pchisq(2*(lambda.ml$MaximumLikelihood - lambda0.ml$logLikelihood), 1) ; p.value # LRT
+# 
+# # Pagel's kappa model (Punctuated equilibrium)
+# kappa.ml <- transformPhylo.ML(phy = phylo_helico, y = sp_env_mat_339, model = "kappa", profilePlot=T)
+# p.value <- 1 - pchisq(2*(kappa.ml$MaximumLikelihood - bm.ml$logLikelihood), 1) ; p.value
+# bm.ml$AICc - kappa.ml$AICc
+# Evol_mods_summary_df_4var[3,] <-  c("Kappa", round(kappa.ml$MaximumLikelihood, 3), round(kappa.ml$AICc, 3), NA, round(kappa.ml$Kappa[1,1],3))
+# 
+# 
+# # Pagel's lambda-kappa
+# kappa.lambda.ml <- transformPhylo.ML(phy = phylo_helico, y = sp_env_mat_339, model="kappa", lambdaEst = T, profilePlot=T)
+# kappa.lambda.ml
+# Evol_mods_summary_df_4var[4,] <-  c("Kappa - Lambda", round(kappa.lambda.ml$MaximumLikelihood, 3), round(kappa.lambda.ml$AICc, 3), round(kappa.lambda.ml$lambda,3), round(kappa.lambda.ml$Kappa[1,1],3))
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - bm.ml$logLikelihood), 2) ; p.value
+# bm.ml$AICc - kappa.lambda.ml$AICc
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - kappa.ml$MaximumLikelihood), 1) ; p.value
+# kappa.ml$AICc - kappa.lambda.ml$AICc
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - lambda.ml$MaximumLikelihood), 1) ; p.value
+# lambda.ml$AICc - kappa.lambda.ml$AICc
+# 
+# save(Evol_mods_summary_df_4var, file = paste0("../outputs/Niche_evolution/Phylo_signal/Evol_mods_summary_df_4var.RData"))
+
+# No phylogenetic signal, despite signal in most variables individually. Could be due to model misspecification due to the number of dimensions (Adams & Collyer, 2018)
+# Try on a reduced number of dimensions after applying Revell's pPCA.
+
+### 2.2/ On the pPC-axis ####
+
+### Run Revell's PCA on all species in the phylogeny
+source(paste0("../functions/Revell_phyl_pca.R"))
+
+# Create input matrices
+C <- vcv(phylo_helico) # Variance-covariance matrix based on species phylogeny
+X <- sp_env_mat # Environmental data matrix
+
+# Check the rows in the two matrices match each other
+identical(row.names(C), row.names(X))
+
+PCA.Revell<- Revell_phyl_pca(C, X, mode = "corr")
+diag(PCA.Revell$Eval) # eigenvalues
+PCA.Revell$Evec # eigenvectors used to project new objects in the new pPCA space
+PCA.Revell$S # scores = coordinates of objects in the new space
+PCA.Revell$L # PC loadings
+PCA.Revell$ancestral # Standardized ancestral states of traits
+PCA.Revell$evolVCV # Evolutionary variance/covariance matrix
+PCA.Revell$evol_corr # Evolutionary correlation matrix
+PCA.Revell$X # Standardized trait matrix
+
+PCvar <- round(diag(PCA.Revell$Eval)/sum(PCA.Revell$Eval),3) ; PCvar # % Explained variance per axis
+cumVar <- round(cumsum(diag(PCA.Revell$Eval))/sum(PCA.Revell$Eval),3) ; cumVar # % Cumulative explained variance
+# 89.5% of variance explained with the 3 first axes, 72.6% with two
+
+save(PCA.Revell, PCvar, file = paste0("../outputs/Niche_evolution/PCA.Revell.RData"))
+
+# Extract coordinates for species in the new pPCA climatic space
+pPC.env_sp <- PCA.Revell$S[,1:2]
+
+save(pPC.env_sp, file = paste0("../outputs/Niche_evolution/pPC.env_sp.RData"))
+
+### Fit models on pPC climatic data
+
+?transformPhylo.ML
+
+load(file = paste0("../outputs/Niche_evolution/pPC.env_sp.RData"))
+identical(phylo_helico$tip.label, row.names(pPC.env_sp))
+
+# Create summary table for evolutionary models comparison
+Evol_mods_summary_df_2pPC <- data.frame(Model = character(), Likelihood = numeric(), AICc = numeric(), lambda = numeric(), kappa = numeric())
+Evol_mods_summary_df_2pPC$Model <- as.character(Evol_mods_summary_df_2pPC$Model)
+
+# Brownian Motion model (neutral evolution with phylogenetic signal)
+bm.ml <- transformPhylo.ML(phy = phylo_helico, y = pPC.env_sp, model = "bm")
+bm.ml
+Evol_mods_summary_df_2pPC[1,] <-  c("BM", round(bm.ml$logLikelihood, 3), round(bm.ml$AICc, 3), NA, NA)
+
+# Pagel's lambda model (modulate phylogenetic signal)
+lambda.ml <- transformPhylo.ML(phy = phylo_helico, y = pPC.env_sp, model = "lambda", profilePlot=T)
+lambda.ml
+Evol_mods_summary_df_2pPC[2,] <-  c("Lambda", round(lambda.ml$MaximumLikelihood, 3), round(lambda.ml$AICc, 3), round(lambda.ml$Lambda[1,1],3), NA)
+p.value <- 1 - pchisq(2*(lambda.ml$MaximumLikelihood - bm.ml$logLikelihood), 1) ; p.value
+bm.ml$AICc - lambda.ml$AICc
+
+# Test for phylogenetic signal based on Pagel's lambda
+tree0 <- transformPhylo(phy = phylo_helico, model = "lambda", y = pPC.env_sp, lambda = 0) # Get the transformed tree with Pagel's lambda = 0
+lambda0.ml <- transformPhylo.ML(phy = tree0, y = pPC.env_sp, model = "bm") # Estimate best model on BM on transformed tree
+p.value <- 1 - pchisq(2*(lambda.ml$MaximumLikelihood - lambda0.ml$logLikelihood), 1) ; p.value # LRT: Khi = 3.47 ; df = 1 ; p-value = 0.062.
+
+
+# Pagel's kappa model (Punctuated equilibrium)
+kappa.ml <- transformPhylo.ML(phy = phylo_helico, y = pPC.env_sp, model = "kappa", profilePlot=T)
+p.value <- 1 - pchisq(2*(kappa.ml$MaximumLikelihood - bm.ml$logLikelihood), 1) ; p.value
+bm.ml$AICc - kappa.ml$AICc
+Evol_mods_summary_df_2pPC[3,] <-  c("Kappa", round(kappa.ml$MaximumLikelihood, 3), round(kappa.ml$AICc, 3), NA, round(kappa.ml$Kappa[1,1],3))
+
+
+# Pagel's lambda-kappa
+kappa.lambda.ml <- transformPhylo.ML(phy = phylo_helico, y = pPC.env_sp, model="kappa", lambdaEst = T, profilePlot=T)
+kappa.lambda.ml
+Evol_mods_summary_df_2pPC[4,] <-  c("Kappa - Lambda", round(kappa.lambda.ml$MaximumLikelihood, 3), round(kappa.lambda.ml$AICc, 3), round(kappa.lambda.ml$lambda,3), round(kappa.lambda.ml$Kappa[1,1],3))
+p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - bm.ml$logLikelihood), 2) ; p.value
+bm.ml$AICc - kappa.lambda.ml$AICc
+p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - kappa.ml$MaximumLikelihood), 1) ; p.value
+kappa.ml$AICc - kappa.lambda.ml$AICc
+p.value <- 1 - pchisq(2*(kappa.lambda.ml$MaximumLikelihood - lambda.ml$MaximumLikelihood), 1) ; p.value
+lambda.ml$AICc - kappa.lambda.ml$AICc
+
+save(Evol_mods_summary_df_2pPC, file = paste0("../outputs/Niche_evolution/Evol_mods_summary_df_2pPC.RData"))
+write.csv2(Evol_mods_summary_df_2pPC, file = "../tables/Evol_mods_summary_df_2pPC.csv")
+
+# ### 2.3/ Explore Kappa-Lambda likelihood landscape ####
+#Not needed because the best AIC is lambda only
+# 
+# # Generate the vectors of parameters to explore
+# lambda <- seq(0, 1, 0.01) ; kappa <- rev(seq(0, 1, 0.01))
+# # Generate the matrix of results
+# lk_landscape <- matrix(data = NA, nrow = length(kappa), ncol = length(lambda))
+# 
+# # Loop to compute likelihood for every combination of lambda and kappa
+# for (i in 1:nrow(lk_landscape)) {
+#   for (j in 1:ncol(lk_landscape)) {
+#     tree_transfo <- transformPhylo(phy = phylo_helico, model = "lambda", lambda = lambda[j]) # Apply lambda first
+#     tree_transfo <- transformPhylo(phy = tree_transfo, model = "kappa", kappa = kappa[i]) # Then kappa
+#     kappa.lambda.ml_test <- transformPhylo.ML(phy = tree_transfo, y = pPC.env_sp_339, model="bm") # Estimate best model in BM on transformed tree
+#     lk_landscape[i,j] <- kappa.lambda.ml_test$logLikelihood 
+#   }
+#   print(i)
+# }
+# save(lk_landscape, file = paste0("../outputs/Niche_evolution/Phylo_signal/lk_landscape.RData"))
+# 
+# # Find position of the optimum
+# pos <- arrayInd(which.max(lk_landscape), dim(lk_landscape))
+# # Extract optimum combination of parameters
+# lambda.max <- lambda[pos[2]]
+# kappa.max <- kappa[pos[1]]
+# 
+# hist(lk_landscape[])
+# 
+# # Plot the heatmap properly
+# pdf(file = "../outputs/Niche_evolution/Phylo_signal/Heatmap_Kappa_Lambda.pdf", height = 6, width = 6)
+# 
+# original_int_margins <- par()$mar
+# par(mar = c(5.1,5,4.1,4))
+# 
+# image(z = t(lk_landscape[nrow(lk_landscape):1,]), xlab = "Lambda", ylab = "Kappa", 
+#       zlim = c(-1550,-1500), 
+#       col = hcl.colors(25, "YlOrRd", rev = T),
+#       main = "Heatmap of Likelihood of Lambda-Kappa models",
+#       cex.axis = 1.7, cex.lab = 1.8, cex.main = 1)
+# points(y = kappa.max, x = lambda.max, cex = 2, col = "black", pch = 16)
+# points(y = kappa.max, x = lambda.max, cex = 1.2, col = "red", pch = 16)
+# 
+# par(mar = original_int_margins)
+# 
+# dev.off()
+# 
+# # Plot the associated scale using raster
+# 
+# library(raster)
+# 
+# pdf(file = "../outputs/Niche_evolution/Phylo_signal/Scale_Heatmap_Kappa_Lambda.pdf", height = 6, width = 7)
+# 
+# original_ext_margins <- par()$oma
+# par(oma = c(0,0,0,5))
+# 
+# plot(raster(lk_landscape), zlim = c(-1550,-1500), col = hcl.colors(25, "YlOrRd", rev = T), axis.args=list(cex.axis=1.4),
+#      legend.args = list(text = "              Likelihood", side = 3, 
+#                         font = 2, line = 1.5, cex = 1.4))
+# 
+# par(oma = original_ext_margins)
+# dev.off()
+# 
+# 
+# # Compute manually best Kappa-Lambda model
+# tree_maxML <- transformPhylo(phy = phylo_helico, model = "lambda", lambda = lambda.max) # Apply lambda first
+# tree_maxML <- transformPhylo(phy = tree_maxML, model = "kappa", kappa = kappa.max) # Then kappa
+# kappa.lambda.ml_max <- transformPhylo.ML(phy = tree_maxML, y = pPC.env_sp_339, model="bm") # Estimate best model in BM on transformed tree
+# kappa.lambda.ml_max$logLikelihood ; kappa.lambda.ml$MaximumLikelihood  # Compare to automatic process
+# 
+# kappa.lambda.ml_max$AICc <- kappa.lambda.ml_max$AICc + 4 # Add the penalization associated with the use of 2 parameters that should be included in the AICc
+# 
+# # Actualize summary table with the results from "manual" exploration of Kappa-Lambda landscape
+# Evol_mods_summary_df_2pPC[4,] <-  c("Kappa - Lambda", round(kappa.lambda.ml_max$logLikelihood, 3), round(kappa.lambda.ml_max$AICc, 3), lambda.max, kappa.max)
+# save(Evol_mods_summary_df_2pPC, file = paste0("../outputs/Niche_evolution/Phylo_signal/Evol_mods_summary_df_2pPC.RData"))
+# write.csv2(Evol_mods_summary_df_2pPC, file = "../tables/Evol_mods_summary_df_2pPC.csv")
+# 
+# # Test for significance with LRT
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml_max$logLikelihood - bm.ml$logLikelihood), 2) ; p.value
+# bm.ml$AICc - kappa.lambda.ml_max$AICc
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml_max$logLikelihood - kappa.ml$MaximumLikelihood), 1) ; p.value
+# kappa.ml$AICc - kappa.lambda.ml_max$AICc
+# 
+# # Is the addition of kappa significant?
+# p.value <- 1 - pchisq(2*(kappa.lambda.ml_max$logLikelihood - lambda.ml$MaximumLikelihood), 1) ; p.value # LRT: Khi = 4.18 ; df = 1 ; p-value = 0.041.
+# lambda.ml$AICc - kappa.lambda.ml_max$AICc # Delta AICc = 2.21
+ 
+# In the end, we chose the lambda model as the best model we can be confident with its parameter estimate.
+
+best_model_2pPCA <- lambda.ml
+lamdba_best_model_2pPCA <- best_model_2pPCA$Lambda[1,1]
+
+save(best_model_2pPCA, lamdba_best_model_2pPCA, file = paste0("../outputs/Niche_evolution/best_model_2pPCA.RData"))
+
+
+
+```
+
+```{r}
+
+##### 3/ Project the OMUs climatic data in the pPCA climatic space ####
+
+# Load pPCA outputs
+load(file = paste0("../outputs/Niche_evolution/PCA.Revell.RData"))
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+load(file = paste0("../input_data/Species_data/unit_env_table_",m,".RData"))
+
+vec_OMU <- unit_env_table[, paste0("OMU_",m), drop = T]
+unit_env_table <- unit_env_table[,-1]
+row.names(unit_env_table) <- vec_OMU
+
+# Standardize env traits following Revell's procedure
+X <- as.matrix(unit_env_table) # Env data for OMU
+V <- PCA.Revell$evolVCV        # Evolutionary variance/covariance matrix of environmental traits based on sp phenetic distances and env data
+a <- PCA.Revell$ancestral      # Ancestral state of env traits based on sp phenetic distances and env data
+eigenV <- PCA.Revell$Evec      # Eigenvectors to project in new space
+one <- matrix(1,nrow(X),1)     # Vector to get means
+X <- X/(one %*% t(sqrt(diag(V))))  # Standardized env data
+pPC.env_units <- (X-one%*%t(a)) %*% eigenV # Project OMU data in new space
+
+save(pPC.env_units, file = paste0("../outputs/Niche_evolution/pPC.env_units_",m,".RData"))
+
+}
+
+```
+
+
+```{r}
+
+##### 4/ Simulate trait evolution under best model ####
+
+### 4.1/ Traits simulation under null hypothesis ####
+
+# Load species phylogeny
+phylo_helico <- readRDS(file = paste0("../input_data/phylogenies/Final_phylogeny.rds"))
+
+# Load best model
+load(file = paste0("../outputs/Niche_evolution/best_model_2pPCA.RData"))
+# best_model_2pPCA, lamdba_best_model_2pPCA
+
+# install.packages(pkgs = "../packages/phylocurve_2.1.1.tar.gz", type = "source")
+
+?sim.traits # Need to provide the model type, the parameters, the evolutionary covariance matrix and ancestral states estimated from motmot.2.0
+
+# Simulation done at species level since the evolutionary model could not be evaluated for OMUs (vcv matrix not invertible due to duplicate in the phylogenetic tree)
+# Since OMUs of the same species occupy the same place in the tree, they will get a value simulated for "within-species observations"
+# By default, phylocurve::sim.traits() add a normally distributed noise for each "within-species" observation that follows N(0, 0.1), so a within-species sd of 0.1 = within-species variance of 0.01
+    # Could be set to zero to be conservative and assume no within-species variance (across the OMU) in the absence of information
+    # Conservative because it will force non-mimetic OMU of the same species to be similar in the simulations
+    # Best approach is to use the observed intra-specific sd to inform the model
+    # Should not change a lot our results for the MCD approaches because it is based on comimic distances.
+# Thus simulation are conducted with the number of repetitions = max nb of OMUs per species (nreps = 8), to be able to randomly attribute a simulated value to each OMU
+
+## 4.1.1/ Compute intra-specific sds from observed OMU data ####
+
+# Load observed values at OMU level in the pPC-axes
+load(file = paste0("../outputs/Niche_evolution/pPC.env_sp.RData"))
+# pPC.env_sp
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load environmental data for OMU in pPC space
+load(file = paste0("../outputs/Niche_evolution/pPC.env_units_",m,".RData"))
+# pPC.env_units
+  
+# Extract first 2 pPC-axes and retrieve OMU names
+pPC.env_units_df <- pPC.env_units[, 1:2] %>% 
+  as.data.frame() %>% 
+  mutate(OMU = row.names(.))
+# Retrieve species names
+pPC.env_units_df$species <- paste(stringr::str_split(string = pPC.env_units_df$OMU, pattern = "\\.", simplify = T)[, 1], stringr::str_split(string = pPC.env_units_df$OMU, pattern = "\\.", simplify = T)[, 2], sep = ".")
+
+# Save updated environmental data for OMU in pPC space
+save(pPC.env_units_df, file = paste0("../outputs/Niche_evolution/pPC.env_units_df_",m,".RData"))
+
+# Compute intra-specific sd
+intraspecific_sd_df <- pPC.env_units_df %>% 
+  group_by(species) %>% 
+  summarize("sd1" = sd(V1), "sd2" = sd(V2)) %>%  # Compute sd within-species per pPC-axis
+  tidyr::replace_na(replace = list(sd1 = 0, sd2 = 0))  # sd fixed to zero for monomorphic species (one OMU)
+# Format as matrix for sim.traits() in the same order than phylogeny tip labels
+intraspecific_sd_mat <- as.matrix(intraspecific_sd_df[match(phylo_helico$tip.label, intraspecific_sd_df$species), c("sd1", "sd2")])
+row.names(intraspecific_sd_mat) <- phylo_helico$tip.label
+# View(intraspecific_sd_mat)
+
+# Save intra-specific sd matrix
+save(intraspecific_sd_mat, file = paste0("../outputs/Niche_evolution/intraspecific_sd_mat_",m,".RData"))
+
+
+## 4.1.2/ Simulate trait evolution ####
+
+# Load intra-specific sd matrix
+load(file = paste0("../outputs/Niche_evolution/intraspecific_sd_mat_",m,".RData"))
+# intraspecific_sd_mat
+
+# Load cleaned list of OMU ordered as in phylogeny
+load(file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+
+# Detect max number of OMU per taxa needed for simulation
+OMUs_counts_table <- table(list.unit_phyl_order$species)[order(table(list.unit_phyl_order$species), decreasing = T)] ; OMUs_counts_table
+max_nb_OMUs <- OMUs_counts_table[1]
+
+# Set seed for reproducibility
+set.seed(seed = 1324)
+
+# Simulation at species level for 8 OMUs per species
+Sim_clim_2pPCA <- sim.traits(tree = phylo_helico,                                     # Species tree
+                             v = best_model_2pPCA$brownianVariance,                   # Evolutionary covariance matrix of pPCA-transformed climatic traits
+                             anc = best_model_2pPCA$root.state,                       # Ancestral state of pPCA-transformed climatic traits
+                             model = "lambda",                                        # Pagel's lambda model type
+                             parameters = list(lambda = lamdba_best_model_2pPCA),     # Lambda = 0.345
+                             nsim = 999,                                              # 999 simulations to get a p-value ranging from 0.001 to 1
+                             nreps = max_nb_OMUs,                                     # nreps = 8, to be able to attribute randomly a value for each OMUs of a species
+                             intraspecific = intraspecific_sd_mat,                    # Provide intra-specific sd per traits
+                             return.type = "matrix")
+
+# str(Sim_clim_2pPCA)
+# plot(Sim_clim_2pPCA$tree) # Original tree
+# plot(Sim_clim_2pPCA$sim_tree) # Transformed tree with lambda = 0.345
+# Sim_clim_2pPCA$original_X # List of simulation results for all species
+# Sim_clim_2pPCA$trait_data # List of simulation results for all OMUs (8 per species)
+
+# pdf("../phylogeny/phylo_OMU_with_lamba0.315.pdf", height=16, width=7)
+# plot(Sim_clim_2pPCA$tree) # Original tree
+# plot(Sim_clim_2pPCA$sim_tree)
+# dev.off()
+
+# Save simulation results
+save(Sim_clim_2pPCA, file = paste0("../outputs/Niche_evolution/Sim_clim_2pPCA_",m,".RData"))
+
+
+# # Example for species 1 (Aeria eurimedia)
+# Sim_clim_2pPCA$original_X[[1]][1,] # Values for species
+# Sim_clim_2pPCA$trait_data[[1]][Sim_clim_2pPCA$trait_data[[1]]$species == row.names(Sim_clim_2pPCA$original_X[[1]])[1], ] # 8 values for potential OMUs of this species
+# 
+# # Example for species 1 (Aeria olena)
+# Sim_clim_2pPCA$original_X[[1]][2,] # Values for species
+# Sim_clim_2pPCA$trait_data[[1]][Sim_clim_2pPCA$trait_data[[1]]$species == row.names(Sim_clim_2pPCA$original_X[[1]])[2], ] # 8 values for potential OMUs of this species
+
+
+### 4.2/ Extract results per OMUs ####
+
+# So far, simulations have been generated for N OMUs per species. Need to attribute values to the proper number of OMUs
+
+list.unit_phyl_order$species <- str_replace_all(list.unit_phyl_order$species, "_", ".")
+
+Sim_clim_2pPCA_OMUs <- list() # Create final list to store results
+for (i in 1:length(Sim_clim_2pPCA$trait_data)) # Per simulation
+{
+  # i <- 1
+  
+  # Extract matrix of simulated data for species (8 values per species)
+  Sim_clim_2pPCA_sp <- Sim_clim_2pPCA$trait_data[[i]]
+  
+  # Generate new template matrix to store simulated data per OMUs ordered as in list.unit_phyl_order
+  pPCA_simul_template <- matrix(data = NA, nrow = nrow(list.unit_phyl_order), ncol = 2)
+  
+  # Extract data per species to fill matrix for OMUs
+  for (j in 1:nrow(Env_species_df)) # Per species
+  {
+    # j <- 1
+    
+    sp <- Env_species_df$species[j] # Get species name
+    sp_pPCA_9 <- Sim_clim_2pPCA_sp[Sim_clim_2pPCA_sp$species == sp, 2:3] # Extract the 8 values simulated for this species
+    
+    OMUs_indices <- which(list.unit_phyl_order$species == sp) # Get indices of OMUs for this species
+    selection_indices <- sample(x = 1:max_nb_OMUs, size = length(OMUs_indices), replace = F) # Extract randomly a set of within-species simulation to use as OMUs values
+    OMUs_pPCA <- sp_pPCA_9[selection_indices, ] # Extract values for OMUs
+    pPCA_simul_template[OMUs_indices, ] <- as.matrix(OMUs_pPCA)  # Store OMUs value in the template for simulated pPCA climatic variables for OMUs
+  }
+  
+  # Store matrix of simulated data in the list of simulations
+  Sim_clim_2pPCA_OMUs[[i]] <- pPCA_simul_template
+  
+  save(Sim_clim_2pPCA_OMUs, file = paste0("../outputs/Niche_evolution/Sim_clim_2pPCA_OMUs_",m,".RData"))
+  
+  if(i %% 100 == 0)
+  {
+    cat(paste0(Sys.time(), " - Simulation for ",m," n°",i, "/999\n"))
+  }
+
+}
+
+}
+
+
+```
+
+```{r}
+
+### Compute matrix of co-mimicry (0/1) used to extract comimetic pairs data
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load cleaned list of OMU ordered as in phylogeny
+load(file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+  
+comimicry_matrix_units <- matrix(nrow = nrow(list.unit_phyl_order), ncol = nrow(list.unit_phyl_order), data = 0)
+for (i in 1:nrow(list.unit_phyl_order))
+{
+  ring_1 <- as.character(list.unit_phyl_order$ring)[i]
+  
+  for (j in 1:nrow(list.unit_phyl_order)) 
+  {
+    ring_2 <- as.character(list.unit_phyl_order$ring)[j]
+    
+    if(i!=j)
+    {
+      if (ring_1 == ring_2) 
+      {
+        comimicry_matrix_units[i,j] <- 1
+      }
+    }
+  }
+  if (i %% 10 == 0) { cat(paste0(Sys.time(), " - OMU n°",i, "/",nrow(list.unit_phyl_order)," for ",m,"\n")) }
+}
+row.names(comimicry_matrix_units) <- colnames(comimicry_matrix_units) <- list.unit_phyl_order$OMU
+save(comimicry_matrix_units, file = paste0("../outputs/Niche_evolution/comimicry_matrix_units_",m,".RData"))
+
+}
+
+```
+
+
+```{r}
+
+##### 5/ Test for convergence in the climatic niche via mean climatic distance of comimics #####
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+### 5.1/ Compute global observed MCD ####
+
+# Load comimicry matrix  
+load(file = paste0("../outputs/Niche_evolution/comimicry_matrix_units_",m,".RData"))
+  
+# Load observed environmental data for OMU in pPC space
+load(file = paste0("../outputs/Niche_evolution/pPC.env_units_df_",m,".RData"))
+# pPC.env_units_df
+
+# Load cleaned list of OMU ordered as in phylogeny
+load(file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+
+# Ensure OMU are in the same order as in phylogeny
+identical(row.names(comimicry_matrix_units), list.unit_phyl_order$OMU)
+
+pPC.env_units_df <- pPC.env_units_df[match(list.unit_phyl_order$OMU, pPC.env_units_df$OMU), ]
+identical(row.names(pPC.env_units_df), list.unit_phyl_order$OMU)
+
+# Save phylo-ordered environmental data for OMU in pPC space
+save(pPC.env_units_df, file = paste0("../outputs/Niche_evolution/pPC.env_units_df_",m,".RData"))
+
+
+# Compute the pairwise climatic distance matrix between the OMUs based on pPCA variables
+pairwise_climdist_pPCA <- dist(x = pPC.env_units_df[, 1:2], method = "euclidian")
+pairwise_climdist_pPCA_mat <- as.matrix(pairwise_climdist_pPCA)
+save(pairwise_climdist_pPCA, pairwise_climdist_pPCA_mat, file = paste0("../outputs/Niche_evolution/pairwise_climdist_OMUs_pPCA_",m,".RData"))
+
+# Compute mean climatic distances
+Global_MCD_obs <- mean(pairwise_climdist_pPCA) # Global MCD for all pairs of OMUs = 4.38
+Comimic_MCD_obs <- weighted.mean(x = pairwise_climdist_pPCA, w = as.dist(comimicry_matrix_units)) # Global MCD only for pairs of comimics = 2.99
+# Need to standardized the comimic MCD because some simulations may create a more dilated or reduced climatic space which make comparison of mean distances biased
+Comimic_MCD_obs_std <- Comimic_MCD_obs/Global_MCD_obs # Standardized MCD obs = 0.682
+
+save(Global_MCD_obs, Comimic_MCD_obs, Comimic_MCD_obs_std, file = paste0("../outputs/Niche_evolution/MCD_obs_stats_",m,".RData"))
+
+
+### 5.2/ Compute global null MCD ####
+
+# Load simulation outputs
+load(file = paste0("../outputs/Niche_evolution/Sim_clim_2pPCA_OMUs_",m,".RData"))
+# Sim_clim_2pPCA_OMUs
+
+# Compute these stats for all the simulations
+Global_MCD_null <- Comimic_MCD_null <- Comimic_MCD_std_null <-  NA # Initiate vectors to store results
+for (i in 1:length(Sim_clim_2pPCA_OMUs)) # Per simulation
+{
+  # i <- 1
+  
+  # Compute the pairwise climatic distance matrix between the OMUs based on simulated pPCA variables
+  pairwise_climdist_pPCA_simul <- dist(x = Sim_clim_2pPCA_OMUs[[i]], method = "euclidian")
+  
+  # Compute mean climatic distances
+  Global_MCD_simul <- mean(pairwise_climdist_pPCA_simul) # For all pairs of OMUs
+  Comimic_MCD_simul <- weighted.mean(x = pairwise_climdist_pPCA_simul, w = as.dist(comimicry_matrix_units)) # For comimics only
+  # Need to standardized the comimic MCD because some simulations may create a more dilated or reduced climatic space which make comparison of mean distances biased
+  Comimic_MCD_std_simul <- Comimic_MCD_simul/Global_MCD_simul # Standardized MCD
+                                     
+  # Store results                             
+  Global_MCD_null[i] <- Global_MCD_simul
+  Comimic_MCD_null[i] <- Comimic_MCD_simul
+  Comimic_MCD_std_null[i] <- Comimic_MCD_std_simul
+  
+  save(Global_MCD_null, Comimic_MCD_null, Comimic_MCD_std_null, file = paste0("../outputs/Niche_evolution/MCD_null_stats_",m,".RData"))
+  
+  if(i %% 10 == 0) { cat(paste0(Sys.time(), " - Simulation for ",m," n°",i, "/999\n")) }
+}
+save(Global_MCD_null, Comimic_MCD_null, Comimic_MCD_std_null, file = paste0("../outputs/Niche_evolution/MCD_null_stats_",m,".RData"))
+
+summary(Comimic_MCD_std_null)
+
+}
+
+```
+
+```{r}
+
+### 5.3/ Plot the distri of the stats for all comimics ####
+
+compute_pvalue_as_quantile <- function (obs_value, null_data)
+{
+  p_value <- round(ecdf(x = c(obs_value, null_data))(obs_value),3)
+  return(p_value)
+}
+  
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+load(file = paste0("../outputs/Niche_evolution/MCD_obs_stats_",m,".RData"))
+load(file = paste0("../outputs/Niche_evolution/MCD_null_stats_",m,".RData"))
+
+pdf(file = paste0("../outputs/Niche_evolution/Comimics_MCD_null_",m,".pdf"), height = 6, width = 7)
+
+original_ext_margins <- par()$oma
+original_int_margins <- par()$mar
+par(oma = c(0,0,0,0), mar = c(5.1,8,4.1,4))
+
+hist(x = c(Comimic_MCD_std_null, Comimic_MCD_obs_std), breaks = 40, freq = TRUE, col = "gray",
+     xlim = c(0.6, 1.2),
+     # ylim = c(0, 200),
+     main = "Distribution of the Mean Climatic Distance \n of co-mimetic OMUs \n under neutral evolution",
+     # main = "",
+     xlab = "Standardized Mean pairwise Climatic Distance",
+     cex.axis = 1.3, cex.lab = 1.4, cex.main = 1.2, lwd = 2)
+
+arrows(Comimic_MCD_obs_std - 0.0003, 53, Comimic_MCD_obs_std - 0.0003, 5, length = 0.1, lwd = 2)  # Draw arrow above mean BC obs
+abline(v = mean(c(Comimic_MCD_std_null, Comimic_MCD_obs_std)), lwd = 2, lty = 2) # Add vertical line for mean value
+abline(v = quantile(c(Comimic_MCD_std_null, Comimic_MCD_obs_std), 0.05), lwd = 2, lty = 2, col = "red") # Add vertical line for 95% value
+
+legend(legend = c(paste0("Mean = ", format(round(mean(c(Comimic_MCD_std_null, Comimic_MCD_obs_std)),3), nsmall = 3)), 
+                  paste0("CI 5% = ", round(quantile(c(Comimic_MCD_std_null, Comimic_MCD_obs_std), 0.05),3))), 
+       x = "topleft", inset = c(0.02, 0.05), 
+       lty = 2 , lwd = 2, col = c("black", "red"), cex = 1.2, bty = "n")
+legend(legend = c(paste0("MCD obs = ", round(Comimic_MCD_obs_std, 3)),
+                  paste0("p = ",compute_pvalue_as_quantile(obs_value = Comimic_MCD_obs_std, null_data = Comimic_MCD_std_null))),
+       x = 0.83, y = 5367 , inset = c(-0.02, -0.05),
+       cex = 1.2, bty ="n", xjust = 1)
+
+legend(legend = as.expression(bquote(bold("A"))), 
+       x = "topright", inset = c(0.05, 0.001), xjust = 0.5,
+       cex = 1.3, bty ="n")
+
+par(oma = original_ext_margins, mar = original_int_margins)
+
+dev.off()
+
+}
+
+```
+
+```{r}
+
+### 5.4/ Compute MCD obs and null distri per mimicry ring ####
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load observed global mean MCD
+load(file = paste0("../outputs/Niche_evolution/MCD_obs_stats_",m,".RData"))
+# Global_MCD_obs, Comimic_MCD_obs, Comimic_MCD_obs_std
+
+# Load observed pairwise MCD
+load(file = paste0("../outputs/Niche_evolution/pairwise_climdist_OMUs_pPCA_",m,".RData"))
+# pairwise_climdist_pPCA, pairwise_climdist_pPCA_mat
+
+# Load cleaned list of OMU ordered as in phylogeny
+load(file = paste0("../outputs/Niche_evolution/list.unit_phyl_order_",m,".RData"))
+# list.unit_phyl_order
+
+# Check if the order is the same
+identical(colnames(pairwise_climdist_pPCA_mat), list.unit_phyl_order$OMU)
+
+# Generate list of mimicry rings 
+ring_list <- as.character(unique(list.unit_phyl_order$ring))
+ring_list <- sort(ring_list)
+
+## 5.4.1/ Compute mean MCD obs per mimicry ring ####
+
+MCD_per_ring_obs <- MCD_std_per_ring_obs <- rep(NA, length(ring_list)) # Generate empty vector to store MPD obs and its standardized version
+
+for (i in 1:length(ring_list)) # Per mimicry ring
+{
+  # i <- 1
+  
+  ring <- ring_list[i]
+  
+  # Get indices of rows/columns associated of OMUs for this ring
+  ring_indices <- which(list.unit_phyl_order$ring == ring)
+  
+  if(length(ring_indices) != 1) # Need computation only if there are more than 1 OMU, otherwise, no MCD possible
+  {
+    # Extract only the pairwise distances for this ring
+    pairwise_dist_ring <- as.dist(pairwise_climdist_pPCA_mat[ring_indices, ring_indices])
+    
+    MCD_per_ring_obs[i] <- mean(pairwise_dist_ring) # Compute MCD for this ring
+    MCD_std_per_ring_obs[i] <- MCD_per_ring_obs[i]/Global_MCD_obs # Compute standardized MCD for this ring
+      
+  }
+  if (i %% 10 == 0) { cat(paste0(Sys.time(), " - For ",m," - MDC obs computed for ring n°",i,"/",length(ring_list),"\n")) }
+}
+names(MCD_per_ring_obs) <- names(MCD_std_per_ring_obs) <- ring_list
+MCD_std_per_ring_obs
+save(MCD_per_ring_obs, MCD_std_per_ring_obs, file = paste0("../outputs/Niche_evolution/MCD_per_ring_obs_",m,".RData"))
+
+
+## 5.4.2/ Compute mean MCD per ring for all the simulations ####
+
+# Load MCD null stats to extract global MCD for each simulation. Used for standardization.
+load(file = paste0("../outputs/Niche_evolution/MCD_null_stats_",m,".RData"))
+# Global_MCD_null, Comimic_MCD_null, Comimic_MCD_std_null
+
+# Load simulation outputs
+load(file = paste0("../outputs/Niche_evolution/Sim_clim_2pPCA_OMUs_",m,".RData"))
+# Sim_clim_2pPCA_OMUs
+
+MCD_per_ring_simul <- NA # Initiate vectors to store results
+MCD_per_ring_null <- MCD_std_per_ring_null <- matrix(data = NA, nrow = length(Sim_clim_2pPCA_OMUs), ncol = length(ring_list)) # Initiate matrix to store results
+for (i in 1:length(Sim_clim_2pPCA_OMUs)) # Per simulation
+{
+  # i <- 1
+  
+  # Compute the pairwise climatic distance matrix between the OMUs based on simulated pPCA variables
+  pairwise_climdist_pPCA_simul <- as.matrix(dist(x = Sim_clim_2pPCA_OMUs[[i]], method = "euclidian"))
+  
+  for (j in 1:length(ring_list)) # Per mimicry ring
+  {
+    # j <- 1
+    
+    ring <- ring_list[j]
+    
+    # Get indices of rows/columns associated of OMUs for this ring
+    ring_indices <- which(list.unit_phyl_order$ring == ring)
+    
+    if(length(ring_indices) != 1) # Need computation only if there are more than 1 OMU, otherwise, no MCD possible
+    {
+      # Extract only the pairwise distances for this ring
+      pairwise_dist_ring <- as.dist(pairwise_climdist_pPCA_simul[ring_indices, ring_indices])
+      
+      # Compute MCD for this ring
+      MCD_per_ring_simul[j] <- mean(pairwise_dist_ring) 
+
+    }
+  }
+  
+  # Store results for each simulation                        
+  MCD_per_ring_null[i, ] <- MCD_per_ring_simul
+  MCD_std_per_ring_null[i, ] <- MCD_per_ring_simul/Global_MCD_null[i] # Compute standardized MCD for this simulation
+  
+  save(MCD_per_ring_null, MCD_std_per_ring_null, file = paste0("../outputs/Niche_evolution/MCD_per_ring_null_stats_",m,".RData"))
+  
+  if(i %% 100 == 0) { cat(paste0(Sys.time(), " - For ",m," - MDC per rings computed for simulation n° ",i, "/",length(Sim_clim_2pPCA_OMUs),"\n")) }
+}
+colnames(MCD_per_ring_null) <- colnames(MCD_std_per_ring_null) <- ring_list
+save(MCD_per_ring_null, MCD_std_per_ring_null, file = paste0("../outputs/Niche_evolution/MCD_per_ring_null_stats_",m,".RData"))
+
+summary(MCD_per_ring_null)
+summary(MCD_std_per_ring_null)
+
+
+### 5.5/ Plot MCD null distri per mimicry ring and generate summary table ####
+
+load(file = paste0("../outputs/Niche_evolution/MCD_per_ring_obs_",m,".RData"))
+# MCD_per_ring_obs, MCD_std_per_ring_obs
+load(file = paste0("../outputs/Niche_evolution/MCD_per_ring_null_stats_",m,".RData")) 
+# MCD_per_ring_null, MCD_std_per_ring_null
+
+MCD_std_per_ring_obs
+MCD_std_per_ring_null
+
+# Reorder in alphabetic order
+
+alphabetic_order <- order(names(MCD_std_per_ring_obs))
+MCD_std_per_ring_obs <- MCD_std_per_ring_obs[alphabetic_order]
+MCD_std_per_ring_null <- MCD_std_per_ring_null[ , alphabetic_order]
+
+ring_list <- names(MCD_std_per_ring_obs)
+
+# Initiate summary table
+MCD_ring_summary_table <- as.data.frame(matrix(ncol = 9, nrow = length(MCD_std_per_ring_obs), data = NA))
+names(MCD_ring_summary_table) <- c("ring", "N_units", "N_pairs", "MCD_obs", "mean_MCD", "MCD_2.5", "MCD_97.5", "p_value", "pattern")
+
+
+for (i in 1:length(ring_list)) # Per mimicry ring
+{
+  # i <- 2
+  
+  MCD_ring_summary_table$ring[i] <- ring <- ring_list[i]
+  MCD_ring_summary_table$N_units[i] <- N_units <- sum(list.unit_phyl_order$ring == ring)
+  MCD_ring_summary_table$N_pairs[i] <- N_pairs <- N_units*(N_units-1)/2
+  
+  if (is.na(MCD_std_per_ring_obs[i])) # Case for ring with only one OMUs. No pairs. No MCD.
+  {
+    pdf(file = paste0("../outputs/Niche_evolution/Per_ring/MCD_null_",ring,"_",m,".pdf"), height = 6, width = 7)
+    
+    plot(1:100,1:100, type = "n", xlab = "Standardized Mean pairwise Climatic Distance",
+         main = paste0("Distribution of Mean Climatic Distance \n of ", ring, " OMUs \n under neutral evolution"))
+    text(x = 50, y = 50, labels = "Only one OMU for this mimicry ring \n No pair available for index computation")
+    
+    dev.off()
+    
+  } else 
+  {
+    mean_val <- round(mean(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i])),3)
+    
+    if (MCD_std_per_ring_obs[i] < mean_val)  # Case for significant signal for convergence
+    {
+      pattern <- "convergence"
+      p_value <- round(ecdf(x = c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]))(MCD_std_per_ring_obs[i]),3)
+    } else  # Case for significant signal for divergence
+    {   
+      pattern <- "divergence"
+      p_value <- round(1 - ecdf(x = c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]))(MCD_std_per_ring_obs[i]),3)
+    }
+    
+    MCD_ring_summary_table$MCD_obs[i] <- round(MCD_std_per_ring_obs[i],3)
+    MCD_ring_summary_table$mean_MCD[i]  <- mean_val
+    MCD_ring_summary_table$MCD_2.5[i] <- round(quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.025),3)
+    MCD_ring_summary_table$MCD_97.5[i] <- round(quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.975),3)
+    MCD_ring_summary_table$p_value[i] <- p_value
+    MCD_ring_summary_table$pattern[i] <- pattern    
+    
+    
+    histo.save <- hist(MCD_std_per_ring_null[,i],
+                       breaks = 30,
+                       plot = F)
+    
+    pdf(file = paste0("../outputs/Niche_evolution/Per_ring/MCD_null_",ring,"_",m,".pdf"), height = 6, width = 7)
+    
+    hist(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 
+         breaks = 30,
+         col = "gray", xlab = "Standardized Mean pairwise Climatic Distance", 
+         main = paste0("Distribution of the Mean Climatic Distance \n of co-mimetic OMUs \n under neutral evolution"),
+         cex.axis = 1.3, cex.lab = 1.4, cex.main = 1.2, lwd = 2)
+    arrows(MCD_std_per_ring_obs[i], max(histo.save$counts)/3, MCD_std_per_ring_obs[i], max(histo.save$counts)/30, length = 0.1, lwd = 2)
+    abline(v = mean(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i])), lty = 2, lwd = 2)
+    abline(v = quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.025, na.rm = T), lty = 2, lwd = 2, col = "red")
+    abline(v = quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.975, na.rm = T), lty = 2, lwd = 2, col = "red")
+    legend(legend = c(paste0("N units = ", N_units), 
+                      paste0("N pairs = ", N_pairs)),
+           x = "topright", cex = 1, bty ="n")
+    
+    legend(legend = c(paste0("Mean = ", mean_val), 
+                      paste0("CI 2.5% = ", round(quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.025, na.rm = T),3)),
+                      paste0("CI 97.5% = ", round(quantile(c(MCD_std_per_ring_null[,i], MCD_std_per_ring_obs[i]), 0.975, na.rm = T),3))), 
+           x = "topleft", cex = 1, bty ="n")
+    
+    legend(legend = c(paste0("MCD obs = ", round(MCD_std_per_ring_obs[i], 3)),
+                      paste0("p = ", p_value)),
+           x = "left", cex = 1, bty ="n")
+    
+    dev.off()
+  }
+  
+  save(MCD_ring_summary_table, file = paste0("../outputs/Niche_evolution/MCD_ring_summary_table_",m,".Rdata"))
+  
+  cat(paste0(Sys.time(), " - For ",m," - N° ",i, "/",length(ring_list)," - ",ring, " - Summary data done\n"))
+}
+
+View(MCD_ring_summary_table)
+write.csv2(MCD_ring_summary_table, file = paste0("../tables/MCD_ring_summary_table_",m,".csv"))
+
+}
+
+```
+

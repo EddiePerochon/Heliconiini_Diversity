@@ -1,0 +1,77 @@
+---
+title: "03_Mimicry_rings add"
+output: html_document
+---
+
+
+##### Script 03: Include mimicry rings in data #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+  # Add mimicry rings to occcurrences
+###
+
+
+### Inputs
+  # Occurrence dataset
+  # List of mimicry rings defined with pictures
+  # List of mimicry rings inferred with other species/ subspecies information
+###
+
+### Outputs
+  # Dataset with mimicry ring information
+###
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+```
+
+```{r}
+rm(list = ls())
+```
+
+```{r}
+HelicoDB_mimicry<-read.csv("../input_data/occurences_df/Helico_FinalDB.csv", header=T, sep=",")[,2:25]
+HelicoDB_mimicry$fullname<-str_replace(HelicoDB_mimicry$fullname, " $", "")
+
+Mimicry_rings <- read_excel("../Excels d'info/Mimicry-rings.xlsx")
+
+names(Mimicry_rings)<-c("fullname", "Mimicry_ring")
+HelicoDB_mimicry<-merge(HelicoDB_mimicry, Mimicry_rings, "fullname", all = T)
+HelicoDB_mimicry<-HelicoDB_mimicry[is.na(HelicoDB_mimicry$genus)==FALSE,]%>%
+
+
+
+##Manual for those with no photos
+  Manual_mimicry_add<- read.csv("Manual_mimicry_add.csv", header=T, sep=";")[,1:3]
+  HelicoDB_mimicry<-merge(HelicoDB_mimicry, Manual_mimicry_add, "fullname", all.x=T)
+  
+  for (i in 1:nrow(HelicoDB_mimicry)) {
+    if(is.na(HelicoDB_mimicry$Manual_ring[i])==FALSE){
+      HelicoDB_mimicry$Mimicry_ring[i]<-HelicoDB_mimicry$Ring[i]
+    }
+    else{HelicoDB_mimicry$Manual_ring[i]<-FALSE}
+  }
+    
+Helico_mim_known<-HelicoDB_mimicry[is.na(HelicoDB_mimicry$Mimicry_ring)==FALSE,]
+
+Helico_mim_known<-subset(Helico_mim_known, select=-Ring)
+
+
+Mimicry_rings$fullname[is.na(match(Mimicry_rings$fullname, HelicoDB_mimicry$fullname))==TRUE]
+```
+
+
+```{r}
+write.table(Helico_mim_known, "../input_data/occurences_df/DB_with_MimRin.csv", sep=";")
+```
+

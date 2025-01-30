@@ -1,0 +1,178 @@
+---
+title: "18b_Dominant_ring"
+author: "Eddie Pérochon"
+date: "29/06/2021"
+output: html_document
+---
+
+##### Script 18bis : Dominant rings #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Create a map of dominant mimicry rings by community
+
+ 
+### Inputs 
+      # Mimicry ring richness maps of script 18
+###
+
+### Outputs
+ # Map of dominant mimicry rings on each cell
+
+###
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+# Effacer l'environnement
+rm(list = ls())
+
+library(raster)
+library(rangeBuilder)
+library(plotrix)
+library(rnaturalearthhires)
+library(rapport)
+```
+
+```{r}
+load("../input_data/envData/continent_mask.RData")
+ring_dominance<-continent_mask
+load("../input_data/occurences_df/list_occ_after_clipping_rs.RData")
+mimicry.list <- as.character(unique(list_occ$Mimicry_ring))
+
+load("../input_data/envData/crop_shape.RData")   #continent border
+sea_shp<-readRDS("../input_data/Map_stuff/sea_shp.RDS") #sea shape
+grid_shp<-readRDS("../input_data/Map_stuff/grid_Mollweide_out.rds") #grid shape
+bbox<-readRDS("../input_data/Map_stuff/bbox_sp_Mollweide.rds") #black box
+```
+
+
+```{r}
+#plot para
+ main_title_cex = 1.5                 # Main title size
+xlim = c(-5457, 4953)   # Limit of plot on x-axis (Longitude)
+ylim = c(-4495, 5705)    # Limit of plot on y-axis (Latitude)
+axis_cex = 1.4             # Axes size
+ xlab = ""                # X-axis label
+ ylab = ""                # Y-axis label
+x_axis_breaks = c(-3930, -2170, -420, 1500, 3050)            # X-axis tick breaks
+y_axis_breaks = c(-3650, -2450, -1220, 0, 1230, 2445, 3660, 4890)        # Y-axis tick breaks
+x_axis_labels = c("120°E", "100°E", "80°E", "60°E", "40°E")      # X-axis tick labels
+y_axis_labels = c("30°S", "20°S", "10°S", "0°", "10°N", "20°N", "30°N", "40°N")  # Y-axis tick labels
+legend_title_cex = 1.4   # Legend title size
+legend_title_x = -3550   # Legend title x position
+legend_title_y = 430     # Legend title y position
+legend_cex = 1.4         # Legend size
+legend_location = c(-4100, -3800, -3950, 0)  # Legend position
+scale_bar_position = c(-2600, -4000)  # Scale bar position
+arrow_scale = 0.45           # North arrow size
+arrow_padin = c(0.15, 0.15)  # North arrow position adjustement
+facet_letter = ""                  # Small case letter for facet
+facet_letter_col = "black"         # Color of case letter for facet
+facet_letter_cex = 2.2             # Size of small case letter for facet
+facet_letter_inset = c(0, -0.008)  # Position adjustment of small case letter for facet
+
+```
+
+
+
+```{r}
+for (i in 1:length(mimicry.list))
+{
+  ring<-mimicry.list[i]
+  
+ring.rich <- readRDS(file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.80_",ring,".rds"))
+ring_dominance<-stack(ring_dominance, ring.rich)
+names(ring_dominance[[i+1]])<-ring
+}
+
+
+
+for (i in 1: length(ring_dominance$layer.1))
+{
+  community<-ring_dominance[i]
+  Dom_ring<-which(community==max(community))
+  if(length(Dom_ring)==1)
+  {
+    ring_dominance$layer.1@data@values[i]<-Dom_ring-1
+  }
+  else if (length(Dom_ring)>0)
+  {
+    Dom_ring<-Dom_ring[1]
+    ring_dominance$layer.1@data@values[i]<-Dom_ring-1
+  }
+  if(i%%100==0){print(i)}
+}
+
+ring_dominance_layer<-ring_dominance[[1]]
+
+save(ring_dominance, file="../input_data/Species_data/Ring_dominance_layer.RData")
+
+rings_lvl<-levels(factor(ring_dominance_layer@data@values))
+
+rings_name<-c()
+for(i in 1:length(rings_lvl))
+{
+  index<-as.numeric(rings_lvl[i])
+  rings_name[i]<-mimicry.list[index]
+}
+
+# colorset<-rainbow(40)
+# 
+# colorset_2<-sample(colorset, 40)
+# 
+# discrete_colors<-alphabet(16)
+# for(i in 1:length(discrete_colors))
+# {
+#   index<-as.numeric(rings_lvl[i])
+#   colorset_2[index]<-discrete_colors[i]
+# }
+# colorset_2[1]<-"grey80"
+# colorset_2[6]<-"yellow"
+# colorset_2[7]<-"cyan"
+# colorset_2[5]<-"orange"
+# colorset_2[14]<-"green"
+# 
+# 
+# save(colorset_2, file="../input_data/Map_stuff/colorfordominance.RData")
+
+col_levels=rings_lvl
+for(i in 1:length(col_levels))
+{col_levels[i]<-as.numeric(col_levels[i])+1}
+```
+
+
+```{r}
+load(file="../input_data/Map_stuff/colorfordominance.RData")
+
+pdf("../Maps/Ring_Dominance.pdf", height = 8, width=8)
+
+     image(ring_dominance_layer, col= colorset_2 , legend=FALSE, main =paste0("Ring local dominance"), cex.axis = 1.4, cex.main = 1.4, axes=FALSE,
+      ylab = "", xlab = "")
+     
+plot(crop_shape, lwd = 1.2, border = "grey20", add = TRUE, legend=F)
+plot(sea_shp, legend=F, col="#E1f1f1", add=T )
+plot(grid_shp, lty = 92, col = "grey80",legend=F,  add = T)
+plot(bbox, lwd = 2, border = "black", col = NA, legend=F, add = T)
+
+axis(side = 1, at = x_axis_breaks, labels = x_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0, padj = 0.5)
+axis(side = 2, at = y_axis_breaks, labels = y_axis_labels, cex.axis = axis_cex, lwd = 0.2, lwd.ticks = 1, gap.axis = 0)
+
+legend(legend = rings_name[2:16], pch = c(rep(16,15)),
+          col = colorset_2[as.numeric(col_levels[2:16])],
+            x = "bottomleft", pt.cex = 2, cex = 0.9, bty ="o", bg="white")
+     graphics::text(x = -3600, y = 500, font = 2, cex = 1.2, label = "Dominant mimicry ring")
+     
+dev.off()     
+
+```
+

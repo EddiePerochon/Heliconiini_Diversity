@@ -1,0 +1,11 @@
+# Initial name of files used for Figures
+
+# Figure 1: Patterns and phylogeny
+figures/Figure_1_Patterns_and_phylo.tif
+
+# Figure 2: Bivariate heatmap of tribe indices
+maps/BivarMap.pdf
+
+# Figure 3: 
+maps/BivarMap_rings.pdf
+

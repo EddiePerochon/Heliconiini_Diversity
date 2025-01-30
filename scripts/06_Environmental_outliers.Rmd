@@ -1,0 +1,432 @@
+---
+title: "06_Environmental outliers"
+output: html_document
+---
+
+
+##### Script 06: Remove environmental outliers #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Clean occurrences that are aberrant in terms of environmental values
+
+
+### Inputs =
+
+#Occurrence data rasterized for each subspecies
+#Environmental stack of selected variables
+
+###
+
+### Outputs
+# List of outliers
+# Outliers evaluation files
+# Occurrences dataset which will be used for modelling
+
+###
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+###clean envi + packages
+rm(list = ls())
+
+library(ade4)
+library(dplyr)
+library(sf)
+library(raster)
+library(rgl)
+library(FactoMineR)
+library(factoextra)
+library(stringr)
+
+```
+
+```{r}
+# Function to check for variance in dataset
+zero_range <- function(x, tol = .Machine$double.eps ^ 0.5) {
+  if (length(x) == 1) return(TRUE)
+  x <- range(x) / mean(x)
+  isTRUE(all.equal(x[1], x[2], tolerance = tol))
+}
+```
+
+```{r fonction pour regarder les levels}
+Donlev<-function(x) {levels(factor(x))}
+
+```
+
+```{r}
+#Files
+load(file = "../input_data/occurences_df/list_occ_wt_modeletype.RData")
+list_occ$code_unit <-str_replace(list_occ$code_unit, "sp_nov", "sp.nov")
+load(file = "../input_data/occurences_df/list_occ_vec.RData")
+list_occ_vec <-str_replace(list_occ_vec, "sp_nov", "sp.nov")
+
+load(file = "../input_data/envData/Envstack.RData")
+
+
+Full_env <- Var_stack_final
+```
+
+
+```{r}
+###Load a df of every occurences after rastering
+
+for (k in seq_along(list_occ_vec)){
+  unit<-list_occ_vec[k]
+  if (k==1)
+  {load(file =paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_",unit,".RData"))
+    Rasterized_df<-as.data.frame(unit_points)
+    Rasterized_df$Tag<-unit
+    print(paste0("Done for ", unit," ", k,"/",length(list_occ_vec))) 
+    } 
+  else {
+   load(file =paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_",unit,".RData"))
+    unit_points<-as.data.frame(unit_points)
+    unit_points$Tag<-unit
+    names(unit_points)<-c("Occurrence", "x", "y", "Tag")
+   Rasterized_df <- rbind(Rasterized_df, unit_points)
+    print(paste0("Done for ", unit," ", k,"/",length(list_occ_vec)))  
+    }
+}
+Rasterized_df<- merge(Rasterized_df, list_occ[,3:8], by.x="Tag", by.y="code_unit")
+
+
+save(Rasterized_df, file ="../input_data/occurences_df/Occ_used_for_SDM.RData")
+
+saveRDS(Rasterized_df, file ="../input_data/occurences_df/Occ_used_for_SDM.RDS")
+    
+
+```
+
+```{r}
+#Load the df and make a list of species
+Occ_used_for_SDM<-readRDS("../input_data/occurences_df/Occ_used_for_SDM.RDS")
+Occ_used_for_SDM$Tag <-str_replace(Occ_used_for_SDM$Tag, "sp_nov", "sp.nov")
+Occ_used_for_SDM$ID_obs<-1:nrow(Occ_used_for_SDM)
+
+Occ_used_for_SDM <- Occ_used_for_SDM %>%
+  tidyr::separate(Tag, c("genus", "sp", "ssp"), "_", remove=F)%>%
+  tidyr::unite( "Sp_ID",c(genus, sp),sep="_", remove=F)
+
+Occ_used_for_SDM$ssp[is.na(Occ_used_for_SDM$ssp)==TRUE]<-""
+
+list_species<-Donlev(Occ_used_for_SDM$Sp_ID)
+```
+
+
+
+
+```{r}
+# ACP initiale pour le 3D plot env.
+
+data_full <- data.frame(rep(NA,10000)) # Need to subsample for only 10000 pixels
+
+index.sample <- sample(x = which(!is.na(Full_env[[1]]@data@values)), size = 10000) # Get index of cells which are not NA
+
+for (i in 1:(length(names(Full_env)))) {
+  data_full[,i] <- Full_env[[i]]@data@values[index.sample] # Retrieve 10000 values from each layer
+}
+names(data_full) <- names(Full_env)[1:length(names(Full_env))]
+
+data_full <- data_full[,-which(names(data_full) == "elev")] # Remove Elevation
+
+ACP <-  dudi.pca(df = data_full, center = T, nf = 2, scannf = F) # G?n?re l'ACP
+# round(ACP$eig/sum(ACP$eig)*100,3) # % variances expliqu?e par les axes : 1e = 62,8% ; 2e = 24,9% ; 3e = 6.0%
+# cumsum(round(ACP$eig/sum(ACP$eig)*100,3)) # Variance expliqu?e cumulative : 1e = 62,8%, 1+2e = 87,7% ; 1+2+3e = 93,7%
+# ACP$co # Correlations variables ~ PCAxis
+
+vec <- ACP$c1[,1:2] # Extract des Eigenvectors pour pouvoir projeter des nouvelles occurences sur les 2 premiers axes
+get_eigenvalue(ACP) # valeur des composantes principales
+
+
+# Tableau final pour stocker les infos d'outliers
+names(Full_env)
+
+Outliers.index <- data.frame(Tag=character(), ID_obs=character(), bio1=numeric(), bio2=numeric(), bio12=numeric(), bio15=numeric(), elev=numeric(), forest=numeric())
+Occ_used_for_SDM$outlier_maha <- F
+
+# Librairies and parameters for 3D plots
+library(rgl)
+zoom <-  1
+userMatrix <- matrix(data = c(0.8154871, 0.5784692, 0.01883241, 0, -0.1358215, 0.1596396, 0.97778738, 0, 0.5626130, -0.7999308, 0.20875259, 0, 0, 0, 0, 1), nrow = 4, ncol = 4, byrow =T)
+windowRect <- c(34,  57, 533, 551)
+viewport <-  c(0, 0, 499, 494) ; names(viewport) <- c("x","y", "width", "height")
+
+
+```
+
+
+```{r}
+
+#####Distance de mahalanobis & envi outliers####
+
+
+for (j in 1:nrow(list_occ)) {
+  Tag <- list_occ$code_unit[j]
+  
+  Dataset <- Occ_used_for_SDM[Occ_used_for_SDM$Tag == Tag,] # Extraction des occurrences par unit
+  
+  if (nrow(Dataset)>2) { # Mahalanobis distance cannot be computed for 2 points
+
+    
+    Env.table <- raster::extract(x = Full_env, y = Dataset[,c("x","y")]) # Extraction des valeurs 
+    index.error <- which(!complete.cases(Env.table)) # Extraction des occurrences en erreur
+    
+    # R?cup?ration d'infos dans les pixels les plus proches de l'occurrence en erreur
+    for (i in index.error) {
+      Error.occ <- Env.table[i,]
+      buffer <- 5000  # Premier buffer = 5km
+      while (anyNA(Error.occ)) { # Elargit le buffer tant que l'on pas r?cup?r? des donn?es
+        Error.occ <- unlist(raster::extract(x = Full_env, y = Dataset[i,c("x","y")], buffer = buffer, fun = mean))
+        buffer <- buffer + 5000 # Nouveau buffer = + 5km
+      }
+      cat("Buffer for",as.character(list_occ$Tag[j]),"=",buffer/1000,"km\n") # Check la largeur finale du buffer
+      Env.table[i,] <- Error.occ # Ecrit l'information
+    }
+    Env.table.orig <- Env.table # Stocke les valeurs non standardis?es
+    
+    # Standardisation des variables pour ?viter le probl?me d'?chelle lors du calcul de distance
+    if(sum(apply(X = Env.table, MARGIN = 2, FUN = zero_range))==0) { # To check for the existence of variance in all variables
+      Env.table <- as.data.frame(scale(Env.table, center = T, scale = T))
+      
+      if(det(as.matrix(cov(Env.table)))>2e-16) { # To avoid error with matrix that cannot be inverted
+        # Calculate Mahalanobis Distance
+        m_dist <- mahalanobis(Env.table, colMeans(Env.table), cov(Env.table))
+        Env.table$m_dist <- round(m_dist, 2)
+        
+        # hist(Env.table$m_dist)
+        # head(Env.table[order(Env.table$m_dist, decreasing = T),])
+        
+        # Mahalanobis Outliers for p = 7 = nb of env. variables
+        p <- 7
+        thres <- qchisq(p= 0.9999999, df = p-1) # Follow a Khi? distri for p-1 df (Etherington, 2019 => distri of p df !!!)
+        Env.table$outlier_maha <- Env.table$m_dist > thres
+        
+        ### Tracer la loi de distri et les outliers sur le plot
+        # x <- seq(0, max(Env.table$m_dist[Env.table$outlier_maha]*1.1), length=1000) ; y <- dchisq(x, df = p-1)
+        # plot(x, y, type="l", lwd=1)
+        # points(x = Env.table$m_dist[Env.table$outlier_maha], y = rep(0.01,sum(Env.table$outlier_maha)), pch = 16, cex = 1.2, col = "red")
+        # segments(x0 = Env.table$m_dist[Env.table$outlier_maha], y0 = rep(0.01,sum(Env.table$outlier_maha)),
+        #          x1 = Env.table$m_dist[Env.table$outlier_maha], y1 = rep(0,sum(Env.table$outlier_maha)), col = "red", lwd = 2)
+        # abline(v=thres, col = "red", lty = 2)
+        
+        ### Liste des outliers
+        if (sum(Env.table$outlier_maha) > 0) { # Si il y a des outliers
+          if (sum(Env.table$outlier_maha) == 1) {
+            New.outliers <- as.data.frame( t (c (as.character(Dataset$Tag[Env.table$outlier_maha]) , as.character(Dataset$ID_obs[Env.table$outlier_maha]), Env.table.orig[Env.table$outlier_maha,]))) # G?n?rer le tableau des outliers
+          }else{
+            New.outliers <- as.data.frame( cbind (as.character (Dataset$Tag[Env.table$outlier_maha ]) , as.character(Dataset$ID_obs[Env.table$outlier_maha]),
+                                                  Env.table.orig[Env.table$outlier_maha,] 
+                                                  )) # G?n?rer le tableau des outliers
+          }
+          names(New.outliers) <- names(Outliers.index)
+          Outliers.index <- rbind(Outliers.index, New.outliers) # Ajouter au tableau existant
+          Occ_used_for_SDM[Occ_used_for_SDM$ID_obs %in% New.outliers[,2],"outlier_maha"] <- T # Stocker l'info dans le dataset
+        }
+        
+        ### 3D plot only if outliers !
+        
+        if (sum(Env.table$outlier_maha) > 0) {
+          coords <- as.matrix(Env.table[,names(data_full)])%*%as.matrix(vec)
+          coords <- as.data.frame(cbind(coords,Env.table$elev)) ; names(coords) <- c("PC1", "PC2", "elev")
+          open3d(zoom = 1, userMatrix = userMatrix, windowRect=windowRect, viewport=viewport) # Ouvre la fen?tre 3D avec une orientation d?finie
+          plot3d(x = coords, type = "n") # To generate the axis
+          # Plot des outliers de la base 
+          text3d(x = coords[(Env.table$outlier_maha),], texts = Dataset$ID_obs[(Env.table$outlier_maha)], col = "red", alpha = 1) # To add the labels in the desired color in the 3D plot
+          #text3d(x = coords[(Env.table$outlier_maha),], texts = Dataset$Tag[(Env.table$outlier_maha)], col = "red", alpha = 1) # To add the labels in the desired color in the 3D plot
+          points3d(x = coords, col=c("black","red")[Env.table$outlier_maha+1], size=5) # To add points in the desired color in the 3D plot
+  
+        
+          rgl.snapshot(filename = paste0("../Maps/Outliers_env/3D_plot/",Tag,".png"), top =T)
+          rgl.close()
+        }
+      }
+    }
+  }
+  if (j%%10 == 0)  { # Print incr?ment seulement tous les 10
+    print(j)
+  }
+}
+```
+
+```{r}
+
+####Map all occurences
+
+###Complete outlier_maha column
+Occ_used_for_SDM$outlier_maha[is.na(Occ_used_for_SDM$outlier_maha==TRUE)]<-FALSE
+
+# Altitude
+Map_elev <- Full_env[[5]]
+
+for (i in 1:length(list_species)){
+  sp <- list_species[i]
+  ssp.set <- Occ_used_for_SDM[ Occ_used_for_SDM$Sp_ID==sp ,c("x","y","ssp","Mimicry_ring")]
+
+jpeg(filename = paste0("../Maps/Occurences_maps/By_sub.species/Full_extent/",sp,".jpeg"), quality =100) 
+plot(Map_elev, main = sp)
+points(ssp.set, col = 1, pch = 16, cex = 0.6)
+points(ssp.set, col = as.numeric(factor(ssp.set$ssp))+1, pch =16, cex = 0.3)
+legend(legend = Donlev(ssp.set$ssp), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(ssp.set$ssp))), x = "bottomleft", cex = 0.9, bty ="o")
+dev.off()
+
+
+jpeg(filename = paste0("../Maps/Occurences_maps/By_mimic/Full_extent/",sp,".jpeg"), quality =100) 
+plot(Map_elev, main = sp)
+points(ssp.set, col = 1, pch = 16, cex = 0.6)
+points(ssp.set, col = as.numeric(factor(ssp.set$Mimicry_ring))+1, pch = 16, cex = 0.3)
+legend(legend = Donlev(ssp.set$Mimicry_ring), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(ssp.set$Mimicry_ring))), x = "bottomleft", cex = 0.9, bty ="o")
+dev.off()
+}
+```
+
+```{r}
+###Mimicry ring mapping
+list_mimicry<-Donlev(Occ_used_for_SDM$Mimicry_ring)
+
+for (i in 1:length(list_mimicry)){
+  mr <- list_mimicry[i]
+  mr.set <- Occ_used_for_SDM[ Occ_used_for_SDM$Mimicry_ring==mr ,c("x","y","Tag","Mimicry_ring", "Sp_ID")]
+
+jpeg(filename = paste0("../Maps/Occurences_maps/Mimicry_rings/By_ssp/",mr,".jpeg"), quality =100) 
+plot(Map_elev, main = mr)
+points(mr.set, col = 1, pch = 16, cex = 0.6)
+points(mr.set, col = as.numeric(factor(mr.set$Tag))+1, pch =16, cex = 0.3)
+legend(legend = Donlev(mr.set$Tag), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(mr.set$Tag))), x = "bottomleft", cex = 0.9, bty ="o")
+dev.off()
+
+
+jpeg(filename = paste0("../Maps/Occurences_maps/Mimicry_rings/By_sp/",mr,".jpeg"), quality =100) 
+plot(Map_elev, main = mr)
+points(mr.set, col = 1, pch = 16, cex = 0.6)
+points(mr.set, col = as.numeric(factor(mr.set$Sp_ID))+1, pch = 16, cex = 0.3)
+legend(legend = Donlev(mr.set$Sp_ID), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(mr.set$Sp_ID))), x = "bottomleft", cex = 0.9, bty ="o")
+dev.off()
+}
+
+```
+
+
+
+```{r}
+
+
+###  outliers in geographical space, per species
+
+
+# Maps on full study area, by mimicry
+for (i in 1:length(list_species)) {
+  sp <- list_species[i]
+  sp.set <- Occ_used_for_SDM[Occ_used_for_SDM$Sp_ID==sp ,c("x","y","Mimicry_ring","outlier_maha")]
+  sp.set.outliers <- Occ_used_for_SDM[(Occ_used_for_SDM$Sp_ID==sp) & (Occ_used_for_SDM$outlier_maha==T), c("x","y","Mimicry_ring")]
+  
+  if (nrow(sp.set.outliers)>0) { # Seulement si il y a des outliers
+    # Dans le dossier par types de maps
+    jpeg(filename = paste0("../Maps/Outliers_env/By_mimic/Full_extent/",sp,".jpeg"), quality =100) 
+   
+    points(sp.set, col = 1, pch = 16, cex = 0.6)
+    points(sp.set, col = as.numeric(factor(sp.set$Mimicry_ring))+1, pch = 16, cex = 0.3)
+    points(sp.set.outliers, col = 1, pch =16, cex = 1.3)
+    col.outliers <- as.numeric(factor(sp.set$Mimicry_ring))+1
+    points(sp.set.outliers, col = col.outliers[sp.set$outlier_maha], pch =16, cex = 0.9)
+    legend(legend = Donlev(sp.set$Mimicry_ring), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(sp.set$Mimicry_ring))), x = "bottomleft", cex = 0.9, bty ="o")
+    dev.off()
+    
+    # Dans le dossier par esp?ces
+    file.copy(from =  paste0("../Maps/Outliers_env/By_mimic/Full_extent/",sp,".jpeg"), to = paste0(getwd(),"/Maps/By_sp/",sp,"/Outliers_env_By_mimic_Full_extent_",sp,".jpeg"), overwrite = T)
+  }
+  
+  if (i%%10 == 0)  { # Print incr?ment seulement tous les 10
+    print(i)
+  }
+}
+```
+
+```{r}
+
+
+# Maps on full study area, by sub.species
+for (i in 1:length(list_species)){
+sp <- list_species[i]
+  ssp.set <- Occ_used_for_SDM[ Occ_used_for_SDM$Sp_ID==sp ,c("x","y","ssp","outlier_maha")]
+  ssp.set.outliers <- Occ_used_for_SDM[ (Occ_used_for_SDM$Sp_ID==sp) & (Occ_used_for_SDM$outlier_maha==T), c("x","y","ssp","outlier_maha")]
+  
+  if (nrow(ssp.set.outliers)>0) { # Seulement si il y a des outliers
+    # Dans le dossier par types de maps
+    jpeg(filename = paste0("../Maps/Outliers_env/By_sub.species/Full_extent/",sp,".jpeg"), quality =100) 
+    plot(Map_elev, main = sp)
+    points(ssp.set, col = 1, pch = 16, cex = 0.6)
+    points(ssp.set, col = as.numeric(factor(ssp.set$ssp))+1, pch =16, cex = 0.3)
+    points(ssp.set.outliers, col = 1, pch = 16, cex = 1.3)
+    col.outliers <- as.numeric(factor(ssp.set$ssp))+1
+    points(ssp.set.outliers, col = col.outliers[ssp.set$outlier_maha], pch =16, cex = 0.9)
+    legend(legend = Donlev(ssp.set$ssp), pch = 16, pt.cex = 1.3, col = 2:(1+length(Donlev(ssp.set$ssp))), x = "bottomleft", cex = 0.9, bty ="o")
+    dev.off()
+    
+    # Dans le dossier par esp?ces
+    file.copy(from =  paste0("../Maps/Outliers_env/By_sub.species/Full_extent/",sp,".jpeg"), to = paste0(getwd(),"/Maps/By_sp/",sp,"/Outliers_env_By_sub.species_Full_extent_",sp,".jpeg"), overwrite = T)
+  }
+  if (i%%10 == 0)  { # Print incr?ment seulement tous les 10
+    print(i)
+  }
+}
+```
+
+
+```{r}
+###Delete outliers from big DF and unit_points + change model type if needed
+Occ_used_for_SDM<-Occ_used_for_SDM[Occ_used_for_SDM$outlier_maha==FALSE,] #Delete on bigDF
+list_occ$N.obs_envOtl<-NA #New column in list_occ to stock number of occ after cleaning
+
+for( i in 1:length(list_occ_vec)){ #Cleaning unit_points files
+  Tag<-list_occ_vec[i]
+  unit_points2<-Occ_used_for_SDM[Occ_used_for_SDM$Tag==Tag, c("Occurrence", "x","y", "Tag") ] 
+  
+  list_occ$N.obs_envOtl[list_occ$code_unit==Tag]<-sum(Occ_used_for_SDM$Occurrence[Occ_used_for_SDM$Tag==Tag])
+    save(unit_points2, file = paste0("../input_data/Species_data/Spatial_Points_Objects/occurrences_", Tag,".RData")) # Sauvegarde du nouvel objet spatial des P/A
+}
+###Pas de changement notable de modele type donc pas besoin d'update list_occ
+
+Occ_used_for_SDM<-merge(Occ_used_for_SDM, list_occ[, c(3,9)], by.x="Tag", by.y="code_unit")
+
+
+```
+
+
+```{r}
+# G?n?ration du tableau final des outliers
+
+Outliers.final <- merge(x = Outliers.index, y =Occ_used_for_SDM, by = "ID_obs")
+
+save(Outliers.final, file = "../input_data/occurences_df/Outliers_env/Outliers.final.RData")
+saveRDS(Outliers.final, file = "../input_data/occurences_df/Outliers_env/Outliers.final.RDS")
+
+
+
+save(list_mimicry, file ="../input_data/useful_vectors/list_mimicry.RData")
+save(list_species, file="../input_data/useful_vectors//list_species.RData")
+save(list_occ_vec, file="../input_data/useful_vectors//list_occ_vec.RData")
+
+list_tag_outliers_env <- as.character(unique(Outliers.final$Tag.x))
+save(list_tag_outliers_env, file = "../input_data/useful_vectors/list.tag.outliers_env.RData")
+
+save(Occ_used_for_SDM, file ="../input_data/occurences_df/Occ_used_for_SDM.RData")
+
+saveRDS(Occ_used_for_SDM, file ="../input_data/occurences_df/Occ_used_for_SDM.RDS")
+
+save(list_occ, file ="../input_data/occurences_df/list_occ_wt_modeletype.RData")
+
+saveRDS(list_occ, file ="../input_data/occurences_df/list_occ_wt_modeletype.RDS")
+```
+
+
+

@@ -1,0 +1,261 @@
+---
+title: "18_Merging_Mimicry_rings"
+author: "Eddie Pérochon"
+date: "11/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 18 : Merging mimicry rings #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+# Create map at mimicry ring level by computing "probability" of presence of any of the ssp of each mimicry ring
+# Generate a continous map for each 4 options between Jaccard/TSS and Buffer.80/95
+
+ 
+### Inputs 
+      # Stack of continous EM and binary maps for each OMU, per mimicry ring from script 16
+###
+
+### Outputs
+   # Mimicry ring probability continous map for each 4 option between Jaccard/TSS and Buffer.80/95 => aggregated with aggreg_proba function
+   # Multiple pages PDF with all mimicry ring probability maps
+   # Mimicry ring richness map for each 4 option between Jaccard/TSS and Buffer.80/95 => aggregated with sum
+   # Multiple pages PDF with all mimicry ring richness maps
+   # Generate a single pdf with all Mimicry ring richness for Jaccard.80
+
+###
+
+
+```{r}
+
+# Effacer l'environnement
+rm(list = ls())
+
+library(raster)
+library(rangeBuilder)
+library(plotrix)
+library(rnaturalearthhires)
+```
+
+```{r}
+# Load continental borders
+
+continent_mask <- readRDS("../input_data/envData/continent_mask.RDS")
+
+
+# Load Summary table for OMU/unit and for Species
+load(file = paste0("../input_data/useful_vectors/list_species.RData"))
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"))
+list_occ <- list_occ[!is.na(list_occ$MR_ss),]
+
+# Mimicry list
+mimicry.list_ss <- as.character(unique(list_occ$MR_ss)) # 39 Mimicry rings
+mimicry.list_sl <- as.character(unique(list_occ$MR_sl)) 
+
+# # Make a list of modeled and non-modeled units (occ.unit = with only occurrences points)
+# modeled_unit <- list_occ[!is.na(list_occ$Model_ID), ]
+# rasterized_unit <- list_occ[is.na(list_occ$Model_ID), ]
+
+# Function to compute probability of presence with multiple unit
+aggreg_prob = function(x, na.rm) { 
+  y <- 1-prod(1-x) # Probability of presence of species = probability of presence of at least one unit = opposite of probability of absence of all unit
+  return(y) # Output
+}
+
+```
+
+```{r}
+### Loop by mimicry ring
+
+ for(m in c("ss", "sl"))
+# for(m in "sl")
+{
+
+mimicry.list <-  get(paste0("mimicry.list_",m))
+mimicry.list <- mimicry.list[!is.na(mimicry.list)]
+  
+p<-progress_estimated(length(mimicry.list), min_time=10)
+
+for (i in 1:length(mimicry.list)) 
+{
+  p$pause(0.1)$tick()$print()
+  # i <- 10
+  
+  # Load a random layer to initiate the stacks (to remove later)
+  ring.stack_Jaccard.80 <- ring.stack_Jaccard.95 <- ring.stack_TSS.80 <- ring.stack_TSS.95 <- stack(continent_mask) 
+  
+  # Load Mimicry ring name
+  ring <- as.character(mimicry.list[i])
+  
+  ### 1/ Make stacks of OMU maps ####
+  
+  unit_list <- list_occ[list_occ[, paste0("MR_",m)] == ring,  ]
+  
+  unit_list<- unique(unit_list[,paste0("OMU_",m)])
+   # If at least one unit was modeled
+    
+    for (j in 1:length(unit_list))  # For each OMU
+    { 
+      unit <-  as.character(unit_list[j]) # Load the unit name                  
+      
+      # Jaccard.80: Load the continuous maps and stack them all
+      Ensemble_Jaccard_median_cropped_80 <- readRDS(file = paste0("../outputs/By_OMU/",unit,"/cont_Jaccard.80_",unit,".rds")) 
+      ring.stack_Jaccard.80 <- addLayer(ring.stack_Jaccard.80, Ensemble_Jaccard_median_cropped_80)   
+      
+      # Jaccard.95: Load the continuous maps and stack them all
+      Ensemble_Jaccard_median_cropped_95 <- readRDS(file = paste0("../outputs/By_OMU/",unit,"/cont_Jaccard.95_",unit,".rds")) 
+      ring.stack_Jaccard.95 <- addLayer(ring.stack_Jaccard.95, Ensemble_Jaccard_median_cropped_95)
+      
+      # TSS.80: Load the continuous maps and stack them all
+      Ensemble_TSS_median_cropped_80 <- readRDS(file = paste0("../outputs/By_OMU/",unit,"/cont_TSS.80_",unit,".rds")) 
+      ring.stack_TSS.80 <- addLayer(ring.stack_TSS.80, Ensemble_TSS_median_cropped_80)   
+      
+      # TSS.95: Load the continuous maps and stack them all
+      Ensemble_TSS_median_cropped_95 <- readRDS(file = paste0("../outputs/By_OMU/",unit,"/cont_TSS.95_",unit,".rds")) 
+      ring.stack_TSS.95 <- addLayer(ring.stack_TSS.95, Ensemble_TSS_median_cropped_95)
+    }
+  
+  # Drop the useless first layer used to initiate the stack
+  ring.stack_Jaccard.80 <- dropLayer(ring.stack_Jaccard.80, i = 1)
+  ring.stack_Jaccard.95 <- dropLayer(ring.stack_Jaccard.95, i = 1) 
+  ring.stack_TSS.80 <- dropLayer(ring.stack_TSS.80, i = 1)
+  ring.stack_TSS.95 <- dropLayer(ring.stack_TSS.95, i = 1)
+  
+  ### 2/ Compute probability map per ring ####
+  
+  ring.cont_Jaccard.80 <- calc(ring.stack_Jaccard.80, fun = aggreg_prob)
+  ring.cont_Jaccard.95 <- calc(ring.stack_Jaccard.95, fun = aggreg_prob)
+  ring.cont_TSS.80 <- calc(ring.stack_TSS.80, fun = aggreg_prob)
+  ring.cont_TSS.95 <- calc(ring.stack_TSS.95, fun = aggreg_prob)
+  
+  plot(ring.cont_Jaccard.80, main = paste0(ring,"\nJaccard.80"))
+  
+  # Make sure to save the data, not just the link to the temp file!
+  ring.cont_Jaccard.80 <- readAll(ring.cont_Jaccard.80)
+  ring.cont_Jaccard.95 <- readAll(ring.cont_Jaccard.95)
+  ring.cont_TSS.80 <- readAll(ring.cont_TSS.80)
+  ring.cont_TSS.95 <- readAll(ring.cont_TSS.95)
+  
+  save(ring.cont_Jaccard.80, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_Jaccard.80_",ring,".RData"), version = "2")
+  saveRDS(ring.cont_Jaccard.80, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_Jaccard.80_",ring,".rds"), version = "2")
+  save(ring.cont_Jaccard.95, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_Jaccard.95_",ring,".RData"), version = "2")
+  saveRDS(ring.cont_Jaccard.95, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_Jaccard.95_",ring,".rds"), version = "2")
+  save(ring.cont_TSS.80, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_TSS.80_",ring,".RData"), version = "2")
+  saveRDS(ring.cont_TSS.80, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_TSS.80_",ring,".rds"), version = "2")
+  save(ring.cont_TSS.95, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_TSS.95_",ring,".RData"), version = "2")
+  saveRDS(ring.cont_TSS.95, file = paste0("../outputs/Mimicry_rings_proba/Ring_proba_TSS.95_",ring,".rds"), version = "2")
+  
+  # Multiple pages pdf with all Ring proba maps
+  pdf(file = paste0("../Maps/Mimicry_rings_proba/Ring_proba_maps_",ring,".pdf"), height = 6, width = 7)
+  plot(ring.cont_Jaccard.80, main = paste0(ring,"\nJaccard.80"))
+  plot(ring.cont_Jaccard.95, main = paste0(ring,"\nJaccard.95"))
+  plot(ring.cont_TSS.80, main = paste0(ring,"\nTSS.80"))
+  plot(ring.cont_TSS.95, main = paste0(ring,"\nTSS.95"))
+  dev.off()
+  
+  ### 3/ Compute richness map per ring (nb of OMU) ####
+  
+  ring.rich_Jaccard.80 <- calc(ring.stack_Jaccard.80, fun = sum)
+  ring.rich_Jaccard.95 <- calc(ring.stack_Jaccard.95, fun = sum)
+  ring.rich_TSS.80 <- calc(ring.stack_TSS.80, fun = sum)
+  ring.rich_TSS.95 <- calc(ring.stack_TSS.95, fun = sum)
+  
+  plot(ring.rich_Jaccard.95, main = paste0(ring,"\nJaccard.95"))
+  
+  # Make sure to save the data, not just the link to the temp file!
+  ring.rich_Jaccard.80 <- readAll(ring.rich_Jaccard.80)
+  ring.rich_Jaccard.95 <- readAll(ring.rich_Jaccard.95)
+  ring.rich_TSS.80 <- readAll(ring.rich_TSS.80)
+  ring.rich_TSS.95 <- readAll(ring.rich_TSS.95)
+  
+  save(ring.rich_Jaccard.80, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.80_",ring,".RData"), version = "2")
+  saveRDS(ring.rich_Jaccard.80, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.80_",ring,".rds"), version = "2")
+  save(ring.rich_Jaccard.95, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.95_",ring,".RData"), version = "2")
+  saveRDS(ring.rich_Jaccard.95, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.95_",ring,".rds"), version = "2")
+  save(ring.rich_TSS.80, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_TSS.80_",ring,".RData"), version = "2")
+  saveRDS(ring.rich_TSS.80, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_TSS.80_",ring,".rds"), version = "2")
+  save(ring.rich_TSS.95, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_TSS.95_",ring,".RData"), version = "2")
+  saveRDS(ring.rich_TSS.95, file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_TSS.95_",ring,".rds"), version = "2")
+  
+  # Multiple pages pdf with all Ring richness maps ####
+  pdf(file = paste0("../Maps/Mimicry_ring_richness/Ring_rich_maps_",ring,".pdf"), height = 6, width = 7)
+  plot(ring.rich_Jaccard.80, main = paste0(ring,"\nJaccard.80"))
+  plot(ring.rich_Jaccard.95, main = paste0(ring,"\nJaccard.95"))
+  plot(ring.rich_TSS.80, main = paste0(ring,"\nTSS.80"))
+  plot(ring.rich_TSS.95, main = paste0(ring,"\nTSS.95"))
+  dev.off()
+  
+  
+}
+
+# 4/ Generate a single pdf with all Mimicry ring richness for Jaccard.80 ####
+
+# 4 rings per pages = 11 pages. Alphabetic order
+
+# # New color palette
+# pal_bl_red_Mannion <- readRDS(file = "../Maps/pal_bl_red_Mannion.rds")
+
+# Load map stuff
+#crop_mask_shp <- readRDS(file = paste0("../input_data/envData/continent_mask.RDS"))
+# bg_mask <- readRDS(file = "../input_data/Map_stuff/bg_mask.rds")
+load("../input_data/envData/Var_stack_WGS84.RDAta")
+
+crop_mask_shp<-rnaturalearthhires::coastline10
+crop_mask_shp<-crop(crop_mask_shp, EnvWGS)
+crop_mask_shp<-spTransform(crop_mask_shp,
+                           CRSobj = CRS("+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs"))
+crop_mask_shp<-crop(crop_mask_shp, continent_mask)
+
+
+# Plot
+pdf(file = paste0("../Maps/Mimicry_ring_richness/All_ring_richness_Jaccard_",m,".80.pdf"), height = 13, width = 13)
+
+internal_margins <- par()$mar
+par(mar = c(3.1,3.5,3.5,2.1))
+par(mfrow = c(2, 2))
+
+for (i in mimicry.list)
+{
+  
+  ring.rich_Jaccard.80 <- readRDS(file = paste0("../outputs/Mimicry_ring_richness/Ring_rich_Jaccard.80_",i,".rds"))
+  
+  # Extract info for legend ticks
+  max <- ring.rich_Jaccard.80@data@max
+  min <- ring.rich_Jaccard.80@data@min
+  
+  image(ring.rich_Jaccard.80, col = rev(heat.colors(n=200)), main = paste0("Mimicry ring richness\n",i), 
+        cex.axis = 1.4, cex.main = 1.6, #axis.args=list(cex.axis=1.4),
+        ylab = "", xlab = "")
+        #legend.args=list(text="          Species", cex=1.2, line = 1, font = 2), 
+        #legend  = F)
+  plot(crop_mask_shp, lwd = 1.2, border = "grey20", add = T)
+  # # plot(rivers, lwd = 0.05, col = "#75b2f6", alpha = 1, add = T)
+  # # plot(country_borders, lwd = 0.2, border = "grey20", color = "", add = T)
+  # plot(crop_mask_shp, lwd = 1, border = "grey20", col = "aliceblue", add = T)
+  # scalebar(d = 2000, type = "line", lwd = 4, divs = 4, xy = c(-100, -33), label = c("", "2000 km", ""), adj = c(0.5, -0.8), font = 2, cex = 1)
+  prettymapr::addnortharrow(scale = 0.7, padin = c(0.2, 0.2), text.col = "#00000000")
+  # addRasterLegend(ring.rich_Jaccard.80, locs = axisTicks(usr = c(min, max), log = F, nint = 5), cex.axis = 1.2, ramp = rev(heat.colors(n=200)), border = T, location = c(-115, -112, -33, 0))
+  graphics::text(x = -111, y = 4, font = 2, cex = 1.3, label = "Species")
+  
+}
+
+par(mar = internal_margins)
+par(mfrow = c(1, 1))
+
+dev.off()
+}
+
+```
+
+

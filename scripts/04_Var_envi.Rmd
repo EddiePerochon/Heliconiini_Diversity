@@ -1,0 +1,344 @@
+---
+title: "04_Var_envi"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##### Script 04: Environmental variables selection #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+  # Import environmental data, set extent and resolution of study area, select variables, and stack them
+###
+
+
+### Inputs
+   # Climatic & elevation data from WorldCLIM
+   # Forest cover data from Landsat Vegetation Continuous Fields (Sexton et al., 2013)
+
+###
+
+### Outputs
+
+   # Final environmental stack
+   # Climatic variable selection assessment: HAC dendrogram, PCA correlation circle, RDA results
+   # Correlation matrix for final stack
+###
+
+```{r}
+# Remove environment
+rm(list = ls())
+
+# Load libraries
+library(raster)
+```
+
+
+```{r}
+Donlev<-function(x) {levels(factor(x))}
+```
+
+```{r}
+My_crop<-function(x){
+xmin = -133 ; xmax = -30 ; ymin = -37 ; ymax = 48
+e <- extent(c(xmin,xmax,ymin,ymax))
+
+cropped<-crop(x, e)
+
+return(cropped)}
+```
+
+```{r}
+RDA_fct<-function(x,y){
+Y4 <- x[,y] # Explanatory variables = set of selected variables
+X4 <- x[,-y] # Responses variables = other climatic variables
+
+RDA <- rda(X = X4, Y = Y4 , scale = T) 
+res_RDA <- round(summary(RDA)$cont[[1]][2:3,]*100, 1) ; res_RDA # To see proportions of constrained and unconstrained inertia
+r2_RDA <- round(RsquareAdj(RDA)$adj.r.squared, 3) ; r2_RDA
+
+# Test significiance of the RDA with permutation on the pseudo F-ratio
+F_test_RDA <- anova.cca(object = RDA, permutations = 1000) ; F_test_RDA 
+F_value <- round(F_test_RDA$F[1], 0)
+p_value <- round(F_test_RDA$`Pr(>F)`[1], 3)
+
+
+### PCA on 4 selected bioclim var.
+PCA_vars <-  dudi.pca(df = x[,y], center = T, nf = 3, scannf = F) # Generate the PCA
+
+# Compute % variance explained by each PC axis.
+var_perc <- round(PCA_vars$eig/sum(PCA_vars$eig)*100, 1) 
+cum_var_perc <- round(cumsum(var_perc),1) # Cumulated explained variance
+PCA_vars$co # Correlation: variables ~ PC axis
+
+
+original_int_margins <- par()$mar
+original_ext_margins <- par()$oma
+par(oma = c(0,2,2,3), mar = c(5.1,7,4.1,7), xpd=NA)
+s.corcircle(PCA_vars$co, xax=1, yax=2, clabel = 1.5)
+text(x = 1.2 , y = -0.8, labels = paste0("PC1: ", var_perc[1], "%"), font = 2, cex = 1.3)
+text(x = -1.4 , y = -0.6, font = 2, cex = 1.3, srt = 90,
+     labels = paste0("PC2: ", var_perc[2], "%\nSum: ", cum_var_perc[2], "%"))
+text(x = 0 , y = 1.1, font = 2, cex = 1.3,
+     labels = paste0("RDA: ", res_RDA[2, length(y)], "%, F = ", F_value, ", p = ", p_value))
+par(mar = original_int_margins, oma = original_ext_margins, xpd = F)
+
+return(res_RDA)
+}
+```
+
+
+```{r}
+VIF_fct<-function(x){ 
+  # Need to subsample for only 10000 pixels
+data_full <- data.frame(rep(NA,10000))
+
+index.sample <- sample(x = which(!is.na(x[[1]]@data@values)), size = 10000) # Get index of cells which are not NA
+
+for (i in 1:(length(names(x)))) {
+  data_full[,i] <- x[[i]]@data@values[index.sample] # Retrieve 10000 values from each layer
+}
+names(data_full) <- names(x)
+
+# Check correlation, including Elevation and Forests
+cor(data_full)
+
+# Rarity::corPlot(df = data_full, method = "spearman")
+
+library(corrgram)
+
+corrgram::corrgram(x = data_full, type = "data", order = T,
+                   lower.panel = panel.pie,  upper.panel = panel.conf, diag.panel = panel.density,
+                   col.regions = colorRampPalette(c("navy", "royalblue", "white", "salmon", "red"))) # pour plotter les correlations entre variables de manière stylée
+
+# Check VIF, including Elevation and Forests
+usdm::vif(data_full)
+
+}
+
+```
+
+
+```{r}
+###### 1/ Import Climatic data ######
+
+# 1.1/ Resolution = 10min ####
+
+# Load a Bioclim layer to use as mask to define terrestrial boundaries
+    BioClim_mask <- stack(raster("Variables bioclim/bioclim_var/wc2.1_5m_bio_1.tif"))
+BioClim_mask<-My_crop(BioClim_mask)
+
+# plot(BioClim_mask)
+
+# Load World Clim stack
+climate.vars <- paste0(1:19)
+envData <- NA
+for (j in climate.vars) {
+  
+  if(j == climate.vars[1]) { # Create the stack
+    
+    envData <- stack(raster(paste0("Variables bioclim/bioclim_var/wc2.1_5m_bio_", j,".tif")))
+  
+  } else { # Add layer iteratively
+     
+    envData <- addLayer(envData, raster(paste0("Variables bioclim/bioclim_var/wc2.1_5m_bio_", j,".tif")))
+    
+  }
+}
+names(envData) <- paste0("bio", 1:19) # Create layer name
+
+save(envData, file = "../input_data/envData/envData.RData")
+saveRDS(envData, file = "../input_data/envData/envData.rds")
+
+```
+
+```{r}
+###Add Forest & altitude
+#Alt 5m
+envfullData <- addLayer(envData, raster("Variables bioclim/bioclim_elev/wc2.1_5m_elev.tif"))
+names(envfullData[[20]])<-"elev"
+
+###Crop our zone
+EnvCropped<-My_crop(envfullData)
+
+###Forest, px=4.5km, already cropped but not exact so resample
+Forest_layer <- raster("Variables bioclim/nasa_forestcover/VCF_Export.tif")
+
+Forest_layer <- resample(Forest_layer, EnvCropped, method="bilinear")
+
+EnvCropped <- addLayer(EnvCropped, Forest_layer)
+names(EnvCropped[[21]])<-"forest"
+
+BioClim_mask
+
+```
+
+```{r}
+Masked_env <- mask(EnvCropped, BioClim_mask) # Apply Bioclim mask to keep only terrestrial data
+
+
+save(Masked_env, file = "../input_data/envData/All_variables.RData")
+saveRDS(Masked_env, file = "../input_data/envData/All_variables.rds")
+
+```
+
+```{r}
+###Mollweide proj
+All_variables<-readRDS("../input_data/envData/All_variables.rds")
+All_variables_MW <- projectRaster(from = All_variables, 
+                           method = "bilinear", # Method for interpolation => "ngb" = nearest neighbor for qualitative (or discrete) variables . "bilinear" = for quantitative variables
+                           crs = "+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs", # If you have the CRS arguments
+                           alignOnly = F)
+
+plot(All_variables_MW[[1]])
+```
+
+
+```{r}
+###raster to resample and make cells of similar sizes
+grid_filter<-raster(nrows=347, ncol=340, ymn=(-4494.85), ymx=5705.15, xmn=(-5456.522), xmx=4953.478, crs = "+proj=moll +lon_0=-79 +lat_0=6 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=km +no_defs")
+
+All_variables_MW_RS <- resample(x = All_variables_MW, y = grid_filter, method = "bilinear")
+
+save(All_variables_MW_RS, file = "../input_data/envData/All_variables_MW_RS.RData")
+saveRDS(All_variables_MW_RS, file = "../input_data/envData/All_variables_MW_RS.rds")
+
+```
+
+
+```{r}
+All_variables_MW_RS<-readRDS("../input_data/envData/All_variables_MW_RS.rds")
+
+### 2.1/ HAC clustering on environmental variables ####
+
+library(virtualspecies)
+source(file = "../functions/raster_multicollinearity.R")
+
+raster_multicollinearity(raster.stack = All_variables_MW_RS[[1:19]], method = "pearson", multicollinearity.cutoff = 0.6, sample.points = T, nb.points = 10000, plot = T)
+
+dev.off()
+```
+
+```{r}
+### 2.2/ PCA and RDA on environmental variables ####
+
+library(ade4)
+library(vegan)
+
+# Need to subsample for only 10000 pixels
+data_clim <- data.frame(rep(NA,10000))
+
+All_variables_MW_RS<-readAll(All_variables_MW_RS)
+
+set.seed(5452)
+index.sample <- sample(x = which(!is.na(All_variables_MW_RS[[1]]@data@values)), size = 10000) # Get index of cells which are not NA
+
+for (i in 1:(length(names(All_variables_MW_RS))- 2)) {
+  data_clim[,i] <- All_variables_MW_RS[[i]]@data@values[index.sample] # Retrieve 10000 values from each layer
+}
+names(data_clim) <- names(All_variables_MW_RS[[1:19]])
+
+
+```
+
+```{r}
+### PCA on all climatic variables
+
+PCA_full <-  dudi.pca(df = data_clim, center = T, nf = 3, scannf = F) # Generate the PCA
+
+# Compute % variance explained by each PC axis
+var_perc <- round(PCA_full$eig/sum(PCA_full$eig)*100, 1) 
+cum_var_perc <- round(cumsum(var_perc), 1) # Cumulated explained variance
+PCA_full$co # Correlation: variables ~ PC axis
+
+# Plot correlation circle of PCA with results of RDA
+
+
+original_ext_margins <- par()$oma
+original_int_margins <- par()$mar
+par(oma = c(0,2,0,3), mar = c(5.1,7,4.1,7), xpd=NA)
+s.corcircle(PCA_full$co, xax=1, yax=2, clabel = 1.5)
+text(x = c(-1, 0), labels = paste0("PC1: ", var_perc[1], "%"), font = 2, cex = 1.3)
+text(x = -1.2 , y = -0.6, adj = c(0, 0), labels = paste0("PC2: ", var_perc[2], "%\nSum: ", cum_var_perc[2], "%"), font = 2, cex = 1.3, srt = 90)
+par(mar = original_int_margins, oma = original_ext_margins, xpd = F)
+
+original_ext_margins <- par()$oma
+original_int_margins <- par()$mar
+par(oma = c(0,2,0,3), mar = c(5.1,7,4.1,7), xpd=NA)
+s.corcircle(PCA_full$co, xax=1, yax=3, clabel = 1.5)
+text(x = c(-1, 0), labels = paste0("PC1: ", var_perc[1], "%"), font = 2, cex = 1.3)
+text(x = -1.2 , y = -0.6, adj = c(0, 0), labels = paste0("PC3: ", var_perc[3], "%\nSum: ", cum_var_perc[3], "%"), font = 2, cex = 1.3, srt = 90)
+par(mar = original_int_margins, oma = original_ext_margins, xpd = F)
+
+original_ext_margins <- par()$oma
+original_int_margins <- par()$mar
+par(oma = c(0,2,0,3), mar = c(5.1,7,4.1,7), xpd=NA)
+s.corcircle(PCA_full$co, xax=2, yax=3, clabel = 1.5)
+text(x = c(-1, 0), labels = paste0("PC2: ", var_perc[2], "%"), font = 2, cex = 1.3)
+text(x = -1.2 , y = -0.6, adj = c(0, 0), labels = paste0("PC3: ", var_perc[3], "%\nSum: ", cum_var_perc[3], "%"), font = 2, cex = 1.3, srt = 90)
+par(mar = original_int_margins, oma = original_ext_margins, xpd = F)
+
+```
+
+```{r}
+## Compute RDA for 5 variables (BIO1, BIO2, BIO12, BIO15, BIO5) = Isothermality, to test representativity
+
+names(data_clim[,20:21])<-c("elev","forest")
+vars_index <- c(1,2,12,15,20,21) # Indices of climatic variable to keep
+RDA_fct(data_clim, vars_index)
+```
+
+
+Var selected: BIO (1,2,5,12,15), elev and forest
+
+```{r}
+Var_stack_final<-All_variables_MW_RS[[c(1,2,5,12,15,20,21)]]
+```
+
+```{r}
+#On test le VIF + correl (voir dans la fonction)
+VIF_fct(Var_stack_final)
+```
+
+```{r}
+##Scatterplot, recherche de corrélations entre variables
+pairs(Var_stack_final, v=NULL, pa='pa', hist=TRUE, cor=TRUE)
+
+#Gros VIF+ bc de corrélation = on regarde sans la var 5
+```
+
+```{r}
+### Compute RDA for 4 variables (BIO1, BIO2, BIO12, BIO15), to test representativity
+
+vars_index <- c(1,2,12,15,) # Indices of climatic variable to keep
+RDA_fct(data_clim, vars_index)
+
+
+```
+```{r}
+Var_stack_final<-Var_stack_final[[-3]]
+VIF_fct(Var_stack_final)
+
+##VIF bien meilleur + moins de corrélations + interpretation limitée: on enlève 5
+```
+
+```{r}
+####Stack final avec 4 BIO + foret + elev
+Var_stack_final <- virtualspecies::synchroniseNA(Var_stack_final)
+VIF_fct(Var_stack_final)
+
+
+save(Var_stack_final, file = "../input_data/envData/Envstack.RData")
+saveRDS(Var_stack_final, file = "../input_data/envData/Envstack.rds")
+```
+
