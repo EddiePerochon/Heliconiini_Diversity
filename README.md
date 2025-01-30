@@ -27,6 +27,7 @@ niches, spanning across phylogenetically distant clades.
 
 All content (including, maps, models, outputs, environmental variables rasters and stacks) is available [here](https://doi.org/10.5281/zenodo.14765686).
 
+
 ## Contents
 
 - [:file_folder: **controls**](controls/) directory contains plots used
