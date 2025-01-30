@@ -25,7 +25,7 @@ __Pérochon et al., 2025 - Müllerian mimicry in Neotropical butterflies: One mi
   Müllerian mimicry is a remarkable example of convergent evolution driven by natural selection where coexisting prey species converge in their warning signal advertising their defense abilities to predators. Heliconiine and ithomiine butterflies found throughout Neotropical rainforests were instrumental in Fritz Müller’s historical model providing the mechanism for such resemblance. Leveraging decades of fieldwork observations, we show that phenotypically similar species present striking broadscale associations in spatial distributions both within and between tribes. Such co-occurrence appears reinforced by the convergence of climatic niche among look-alike species . Our findings emphasize the influential role of mutualistic interactions in shaping large-scale distribution patterns and driving convergence in species niches, spanning across phylogenetically distant clades.
 
 
-All content (including, maps, models, outputs, environmental variables rasters and stacks) is available [here](https://doi.org/10.5281/zenodo.14765686).
+All content (including, maps, models, outputs, environmental variables rasters and stacks) is available [here](https://doi.org/10.5281/zenodo.14765685).
 
 
 
