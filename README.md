@@ -7,7 +7,7 @@ This repository contains the code and data used to carry out analyses
 for this research article:
 
 **Pérochon et al., 2025 - Müllerian mimicry in Neotropical butterflies:
-One mimicry ring to bring them all, and in the jungle bind them. in
+One mimicry ring to bring them all and in the jungle bind them. in
 prep.**
 
 Müllerian mimicry is a remarkable example of convergent evolution driven
