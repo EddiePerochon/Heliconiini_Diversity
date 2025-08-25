@@ -70,7 +70,7 @@ You can download the entire project as a `.zip` from [this URL](https://github.c
 
 Please cite this research article as:
   
-> Pérochon, E., Rosser, N., Kozak, K., McMillan, W.O., Huertas, B., Mallet, J., Ready, J., Willmott, K., Elias, M. & Doré, M. (2025). Müllerian mimicry in Neotropical butterflies: One mimicry ring to bring them all, and in the jungle bind them, in prep.
+> Pérochon, E., Rosser, N., Kozak, K., McMillan, W.O., Huertas, B., Mallet, J., Ready, J., Willmott, K., Elias, M. & Doré, M. (2025). Müllerian mimicry in Neotropical butterflies: One mimicry ring to bring them all and in the jungle bind them, in prep.
 
 
 ## Associated online archives
