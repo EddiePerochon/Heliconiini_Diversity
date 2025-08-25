@@ -713,7 +713,7 @@ distrib_borders <- mask(distrib_borders, sp_richness_bivmap_ss)
 
 ```{r}
 #Mollweide map, create legend for each map
-names_indices_clean_lg <- c("Species\n Richness", "Mean Species\n Geographic Rarity", "Faith's Phylogenetic\n Diversity", "Mimicry ring\n Richness", "Mimicry ring\n Geographic Rarity", " Mimicry ring\n Mean Size")
+names_indices_clean_lg <- c("Species\n richness", "Species\n geographic Rarity", "Faith's Phylogenetic\n Diversity", "Mimicry ring\n Richness", "Mimicry ring\n Geographic Rarity", " Mimicry ring\n Mean Size")
 
 source("../functions/add_bivar_legend.R")
 

@@ -1,0 +1,2043 @@
+---
+title: "32_SchoenersD"
+author: "Eddie Pérochon"
+date: "21/02/2022"
+output: html_document
+---
+
+
+##### Script 32: Schoener's D index for Helico & Itho #####
+
+###################################################
+#      Authors: Eddie Pérochon & Maël Doré        #
+#      Contact: eddie.perochon@hotmail.com        #
+###################################################
+
+
+### Goals = 
+##### Community structure with Schoener's D indices on comimetic pairs of OMUs for Heliconiini, Ithomiini, and Intertribe #####
+
+# Compute SCD indices for all OMUs
+# Compute mean SCD for mimics only and non-mimics only
+# Compute mean SCD per mimicry rings
+# Generate null distribution with randomization of mimicry patterns
+# Plot test results
+
+### Inputs 
+# Inputs
+# Summary table of OMUs
+# Stack of OMUs probabilities of presence
+
+###
+
+### Outputs
+
+### For each groups (Helico, Itho, Inter)
+
+# Matrix of probabilities of presence for OMUs x communities
+# SCD indices for all pairs of ssps, only comimics, only non-comimics, and per rings, and associated means
+# Null distribution of mean values
+# Plot of null distribution and test for all rings, and per rings
+# Summary table for each ring of SCD values
+
+# Final plot with null distri for Ist and mean SCD for comimics
+
+###
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+
+library(raster)
+library(vegan)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(formattable)
+library(tictoc)
+library(readxl)
+library(htmltools)
+library(webshot)    
+
+
+```
+
+```{r}
+#Export function for tables
+export_formattable <- function(f, file, width = "100%", height = NULL, 
+                               background = "white", delay = 0.2)
+    {
+      w <- as.htmlwidget(f, width = width, height = height)
+      path <- html_print(w, background = background, viewer = NULL)
+      url <- paste0("file:///", gsub("\\\\", "/", normalizePath(path)))
+      webshot(url,
+              file = file,
+              selector = ".formattable_widget",
+              delay = delay)
+}
+
+# Function to compute probability of presence with multiple OMUs/rings/ssp
+aggreg_prob = function(x, na.rm) { 
+  y <- 1-prod(1-x) # Probability of presence of OMU = probability of presence of at least one ssp of the OMU = opposite of probability of absence of all ssp of OMU
+  return(y) # Output
+}
+
+```
+
+```{r}
+aggreg_prob = function(x, na.rm) { 
+  y <- 1-prod(1-x) # Probability of presence of any unit = probability of presence of at least element/in at least one cell = opposite of probability of absence of all units/within all cells
+  return(y) # Output
+}
+```
+
+
+```{r}
+## 2.1.1/ Function to compute Schoener's D from raster
+compute_SchoenerD_from_rasters <- function(raster1, raster2)
+{
+  ### Transform rasters into density probability by making all pixel values sum to 1
+  
+  # Raster 1
+  sum1 <- sum(raster1[], na.rm = T)
+  raster1_prob <- raster1/sum1
+  
+  # Raster 2
+  sum2 <- sum(raster2[], na.rm = T)
+  raster2_prob <- raster2/sum2
+  
+  # Case with a raster with no data
+  if ((sum1 == 0) | (sum2 == 0))
+  {
+    SchoenerD <- 0
+    
+  } else { # Regular case with data
+    
+    # Compute Schoener's D from probability rasters
+    SchoenerD <- 1 - (0.5 * raster::cellStats(abs(raster1_prob - raster2_prob), stat = "sum"))
+  }
+  
+  
+  # Return index
+  return(SchoenerD)
+}
+```
+
+```{r}
+##Compute matrices of Schoener's D
+
+##Heliconiini
+# Load summary table for unit & omu list
+load(file = paste0("../input_data/occurences_df/list_occ_after_clipping_rs.RData"))
+load(file="../input_data/envData/continent_mask.RData")
+
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+  list_OMU <- data.frame(OMU = unique(list_occ[,paste0("OMU_", m)]))
+
+HeIt_OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/HeIt_OMU_proba_stack_",m,".RDS"))
+
+HeIt_ring_proba_stack <- readRDS(file = paste0("../input_data/Species_data/HeIt_ring_proba_stack_",m,".RDS"))
+
+
+
+## Prepare summary table for all OMUs (?)
+# 
+# names(HeIt_OMU_proba_stack)
+# names(HeIt_ring_proba_stack)
+
+# list_OMU_HeIt <- data.frame(full_tag = names(HeIt_OMU_proba_stack))
+# OMU_HeIt_split_df <- str_split(string = list_OMU_HeIt$full_tag, pattern = "\\.", simplify = T)
+# list_OMU_HeIt$OMU <- paste0(OMU_HeIt_split_df[, 1], ".", OMU_HeIt_split_df[, 2], ".", OMU_HeIt_split_df[, 3])
+# list_OMU_HeIt$Ring <- OMU_HeIt_split_df[, 3]
+# list_OMU_HeIt$tribe <- OMU_HeIt_split_df[, 4]
+# # 
+# saveRDS(object = list_OMU_HeIt, file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+
+###################
+### 2.1/ Compute pairwise geographic Schoener's
+
+## 2.1.2/ Compute pairwise Schoener's D across all pairs of SDM outputs
+
+# # Aggregate SDM outputs to save computation time
+# HeIt_proba_stack <- raster::aggregate(x = HeIt_proba_stack,
+#                                                fact = 3,
+#                                                fun = aggreg_prob,
+#                                                na.rm = F)
+unit <- c("ring", "OMU")
+
+for (j in 1:length(unit))
+{
+  
+  unit1 <- unit[j]
+
+  HeIt_proba_stack <- get(paste0("HeIt_",unit1,"_proba_stack"))
+  nmpr <- names(HeIt_proba_stack)
+  
+res(HeIt_proba_stack) # Resolution = 0.3° = 33.3 km (at the Equator)
+
+### Issue with shallow area that dissappear while they should not!
+# Ex: Galapagos, Antilles, Central America...
+# plot(ssp_proba_stack_WGS84[[3]])
+# plot(HeIt__proba_stack[[3]])
+
+# To fix issue, add background so all layers have valid pixels where other have data
+background_raster_aggregated_3 <- raster::calc(x = HeIt_proba_stack, fun = function (x) { as.numeric(any(!is.na(x))) })
+background_raster_aggregated_3[background_raster_aggregated_3 == 0] <- NA
+background_raster_aggregated_3 <- background_raster_aggregated_3*0
+plot(background_raster_aggregated_3)
+
+HeIt_proba_stack <- mosaic(x = background_raster_aggregated_3, 
+                                    y = HeIt_proba_stack,
+                                    fun = max)
+names(HeIt_proba_stack) <- nmpr
+# 
+# # Save aggregated SDM outputs
+# saveRDS(object = HeIt_proba_stack, file = "../input_data/HeIt_proba_stack.rds")
+
+# Extract nb of ssp
+nb_ssp <- nlayers(HeIt_proba_stack)
+nb_pairs <- nb_ssp*(nb_ssp-1)/2
+
+# Initiate matrix
+Schoener_similarity_matrix <- matrix(data = 1, nrow = nb_ssp, ncol = nb_ssp)
+# Schoener_similarity_matrix <- readRDS(paste0("../outputs/Community_structure/SchoenerD/Schoener_similarity_matrix_",unit1,"_",m,".rds"))
+
+## Loop per pair of ssp
+n <- 0
+for (i in 2:nb_ssp)
+{
+  # i <- 2
+  
+  for (k in 1:(i-1))
+  {
+    # j <- 1
+    
+    #Do not redo if already done
+    if(Schoener_similarity_matrix[i,k] == 1)
+    {
+    # Extract raster layers
+    ssp_i <- HeIt_proba_stack[[i]]
+    ssp_j <- HeIt_proba_stack[[k]]
+    
+    # Compute pairwise Schoener's D
+    Schoener_D <- compute_SchoenerD_from_rasters(raster1 = ssp_i, raster2 = ssp_j)
+    
+    # Store index up to 3 digits
+    Schoener_similarity_matrix[i,k] <- round(Schoener_D, 3)
+    
+    # Increment counter
+    
+    }
+    n <- n + 1
+    # Print progress
+    if (n %% 100 == 0)
+    {
+      cat(paste0("\n", Sys.time()," - Schoener's D computed for pair n°",n,"/",nb_pairs))
+    }
+       if (n %% 10000 == 0)
+    {
+      # Save Schoener's D similarity matrix
+      saveRDS(object = Schoener_similarity_matrix, file = paste0("../outputs/Community_structure/SchoenerD/Schoener_similarity_matrix_",unit1,"_",m,".rds"))
+    }
+  }
+}
+
+# Add names
+row.names(Schoener_similarity_matrix) <- colnames(Schoener_similarity_matrix) <- names(HeIt_proba_stack)
+
+# Fill upper matrix
+fill_upper_matrix <- function (x)
+{
+  x[upper.tri(x, diag = FALSE)] <- t(x)[upper.tri(x, diag = FALSE)]
+  return(x)
+}
+
+Schoener_similarity_matrix <- fill_upper_matrix(Schoener_similarity_matrix)
+
+# hist(Schoener_similarity_matrix)
+
+# Transform into a distance
+Schoener_dist_matrix <- 1 - Schoener_similarity_matrix
+
+# hist(Schoener_dist_matrix)
+
+
+# Save Schoener's D distance matrix
+saveRDS(object = Schoener_similarity_matrix, file = paste0("../outputs/Community_structure/SchoenerD/Schoener_similarity_matrix_",unit1,"_",m,".rds"))
+saveRDS(object = Schoener_dist_matrix, file = paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_",unit1,"_",m,".rds"))
+####################
+}
+}
+```
+
+```{r}
+####Rings dissimilarity
+
+
+for(m in c("ss", "sl"))
+{
+
+  unit1  <- "ring"
+  
+  unit_SCD_dist_mat <- readRDS( paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_",unit1,"_",m,".rds"))
+  
+   if(unit1 == "ring")
+ {
+   HeIt_ring_cooc_df <- data.frame(Ring_1 = NA, Ring_2 = NA, SCD = NA)
+
+   # Loop per pairs of rings
+   p <- 0 # Initiate counter of pairs
+   # for (o in 1:ncol(unit_SCD_dist_mat))
+   for (o in 1:(ncol(unit_SCD_dist_mat)-1))
+   {
+     # for (n in 1:nrow(unit_SCD_dist_mat))
+     for (n in (o+1):nrow(unit_SCD_dist_mat))
+     {
+       p <- p+1
+       HeIt_ring_cooc_df[p,3] <- unit_SCD_dist_mat[n,o]
+       HeIt_ring_cooc_df[p,1] <- colnames(unit_SCD_dist_mat)[o]
+       HeIt_ring_cooc_df[p,2] <- rownames(unit_SCD_dist_mat)[n]
+    
+       if(p %% 1000 == 0)
+       { cat(paste0(Sys.time(), " - SCD extracted for ",unit1, " pairs n°",p,"/",(ncol(unit_SCD_dist_mat) * (nrow(unit_SCD_dist_mat)-1)/2),"\n")) }
+     }
+   }
+   
+  HeIt_ring_cooc_df <- HeIt_ring_cooc_df %>%
+    arrange(SCD)
+  
+  saveRDS(object = HeIt_ring_cooc_df, file = paste0("../outputs/Community_structure/SchoenerD/HeIt_ring_cooc_df_",m,".RDS"))
+  
+  }
+
+}
+```
+
+
+```{r}
+
+for(m in c("ss", "sl"))
+{
+### 3.2/ Compute mean SCD per mimicry rings (ring x tribes and shared rings (INTER)) ####
+  
+  
+ Schoener_dist_matrix <- readRDS(paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_OMU_",m,".rds"))
+# For OMU analyses only 
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+ 
+ 
+  mimicry.list <- unique(list_OMU_HeIt$Ring)
+  mimicry.tribe.list <- unique(paste0(list_OMU_HeIt$Ring,".",list_OMU_HeIt$tribe))
+  
+  HeIt_OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/HeIt_OMU_proba_stack_",m,".RDS"))
+  
+  mean_SCD <- NA # Initiate vector for mean SCD within each ring (both tribes separated for shared rings)
+  mean_SCD_HI_INTER <- NA # Initiate vector for mean SCD within shared rings, between pairs of INTER-tribes OMUs
+  mean_SCD_HI_HEL <- NA # Initiate vector for mean SCD between Heliconiini
+  mean_SCD_HI_ITH <- NA # Initiate vector for mean SCDbetween Ithomiini
+  
+    stack_name <- "HeIt_OMU"
+  
+## Compute mean SCD within all rings (for shared rings = split between the two tribes)  
+for (i in 1:length(mimicry.tribe.list)) # Per mimicry rings x tribes
+{
+  # i <- 3
+  ring.tribe <- mimicry.tribe.list[i]
+
+  # Get names and indices of all units/OMUs for this ring
+  tags <- as.character(list_OMU_HeIt$full_tag[paste0(list_OMU_HeIt$Ring,".",list_OMU_HeIt$tribe) == ring.tribe]) # Get names of all OMUs in the ring
+  
+  index <- which(names(HeIt_OMU_proba_stack) %in% tags) 
+  # Get index of layer for these OMUs
+
+  if (length(tags) == 1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+  {
+    mat.index <- data.frame(matrix(nrow = 2, ncol = 0))
+    # Empty df of pairs indices (no pairs of OMUs)
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.",ring.tribe,"_",stack_name,"_",m,".RData"))
+    SCD <- c() # Empty vector of Schoener'S D values
+    save(SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD.",ring.tribe,"_",stack_name,"_",m,".RData"))
+    mean_SCD[i] <- NA
+
+  } else { # Case with at least 2 OMUs.
+    mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    save(mat.index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.",ring.tribe,"_",stack_name,"_",m,".RData"))
+
+    SCD <- c(rep(1, ncol(mat.index))) # Initiate the vector used to store all SCD values
+    for (j in 1:ncol(mat.index)) # For each pair of OMUs
+    {
+      SCD[j] <- Schoener_dist_matrix[mat.index[1,j], mat.index[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+    }
+    save(SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD.",ring.tribe,"_",stack_name,"_",m,".RData")) # Save the vector of SCD for all pairs of OMUs in this ring
+    mean_SCD[i]  <- mean(SCD) # Compute mean SCD for all pairs of this mimicry ring x tribe and store it in final vector
+  }
+
+  cat(paste0(Sys.time(), " - Mean SCD across OMU within ", ring.tribe," computed - n°",i, " on ",length(mimicry.tribe.list),"\n"))
+
+}
+
+names(mean_SCD) <- mimicry.tribe.list # Associate mean SCD value with ring x tribe name
+save(mean_SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_",stack_name,"_",m,".RData")) # Save final vector with mean SCD values per ring
+saveRDS(mean_SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_",stack_name,"_",m,".rds")) # Save final vector with mean SCD values per ring
+
+  
+## Compute mean SCD between Inter-tribes pairs within shared rings   
+  
+# Import df of rings shared between tribes
+# Upload df of comimetic rings
+COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+
+# Loop per shared mimicry rings
+for (i in 1:nrow(COMIM_rings)) 
+{
+  # i <- 2
+
+  
+  ring <- COMIM_rings$Ring[i]
+  ringH <- COMIM_rings$RINGH[i]
+  ringI <- COMIM_rings$RINGI[i]
+  
+  # Get names and indices of all units/OMUs for this ring
+  tags <- as.character(list_OMU_HeIt$full_tag[list_OMU_HeIt$Ring == ring]) # Get names of all OMUs in the ring
+
+  index <- which(names(HeIt_OMU_proba_stack) %in% tags) 
+  # Get index of layer for these OMUs
+
+  if (length(tags) == 1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+  {
+    mat.index <- data.frame(matrix(nrow = 2, ncol = 0))
+    # Empty df of pairs indices (no pairs of OMUs)
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",ring,".BOTH_",stack_name,"_",m,".RData"))
+    save(mat.index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",ring,".INTER_",stack_name,"_",m,".RData"))
+    
+    SCD <- c() # Empty vector of Schoener'S D values
+    save(SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD.HI.",ring,".BOTH_",stack_name,"_",m,".RData"))
+    save(SCD, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD.HI.",ring,".INTER_",stack_name,"_",m,".RData"))
+    mean_SCD[i] <- NA
+
+  } else { # Case with at least 2 OMUs.
+    
+    mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    
+    # Remove pairs that are not Inter-tribes
+    Inter_tribes_pairs <- (list_OMU_HeIt$tribe[mat.index[1,]] != list_OMU_HeIt$tribe[mat.index[2,]])
+    mat.index.INTER <- mat.index[, Inter_tribes_pairs, drop = FALSE]
+    
+    
+    save(mat.index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",ring,".BOTH_",stack_name,"_",m,".RData"))
+    save(mat.index.INTER, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",ring,".INTER_",stack_name,"_",m,".RData"))
+
+    # Get the SCD values for inter-tribes pairs (INTER)
+    SCD.INTER <- c(rep(1, ncol(mat.index.INTER))) # Initiate the vector used to store all SCD values
+    for (j in 1:ncol(mat.index.INTER)) # For each pair of OMUs
+    {
+      SCD.INTER[j] <- Schoener_dist_matrix[mat.index.INTER[1,j], mat.index.INTER[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+    }
+    save(SCD.INTER, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD.HI.",ring,".INTER_",stack_name,"_",m,".RData"))
+    
+    # Save the vector of SCD for all pairs of OMUs in this ring
+    mean_SCD_HI_INTER[i]  <- mean(SCD.INTER) # Compute mean SCD for all pairs of this mimicry ring and store it in final vector
+  }
+
+  # cat(paste0(Sys.time(), " - ", ring," - n°",i, " on ",length(mimicry.list),"\n"))
+  cat(paste0(Sys.time(), " - Mean SCD across OMU within shared ring ", ring," computed - n°",i, " on ",nrow(COMIM_rings),"\n"))
+}
+
+
+# Save mean SCD for shared rings, across inter-tribes pairs only (INTER)
+names(mean_SCD_HI_INTER) <- paste0(COMIM_rings$Ring,".INTER") # Associate mean SCD value with ring name
+save(mean_SCD_HI_INTER, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_HI.INTER_",stack_name,"_",m,".RData")) # Save final vector with mean SCD values per ring
+saveRDS(mean_SCD_HI_INTER, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_HI.INTER_",stack_name,"_",m,".rds"))
+
+
+}
+
+```
+
+
+```{r}
+
+## 3.3/ Compute Global observed mean SCD for all comimics, all rings x tribes taken into account ####
+
+stack_name <- "HeIt_OMU"
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+  # Load directly the vector of SCD distances among all units
+  unit_SCD_dist <- readRDS(paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_OMU_",m,".rds"))
+  # unit_proba_stack <- readRDS(file = paste0("../input_data/Species_data/",stack_name,"_proba_stack_",m,".RDS"))
+
+  # Convert distance vector to matrix
+  Schoener_dist_matrix <- as.matrix(unit_SCD_dist)
+
+  # Load OMU list
+  list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+  
+  # Upload df of comimetic rings
+  COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+
+
+## Get indices for all pairs of comimics
+
+mimicry.tribe.list <- unique(paste0(list_OMU_HeIt$Ring,".",list_OMU_HeIt$tribe))
+
+all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow=2)) # Initiate empty df to store indices of pairs of comimics
+# Loop per ring x tribes
+for (i in seq_along(mimicry.tribe.list))
+{
+  # i <- 1
+  ring.tribe <- mimicry.tribe.list[i]
+  
+  # Check if it is a shared ring
+  shared_ring_test <- (ring.tribe %in% COMIM_rings$RINGH | ring.tribe %in% COMIM_rings$RINGI)
+  
+  # If the ring is not shared, load the ring x tribe matrix
+  if (!shared_ring_test)
+  {
+    # Load matrix of indices of pairs of OMUS within the ring x tribe
+    load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.",ring.tribe,"_",stack_name,"_",m,".RData"))
+    
+    # Merge them all in one df
+    all_mimic_mat_index <- cbind(all_mimic_mat_index, mat.index) 
+    
+  } else {
+    # If the ring is shared, don't load anything yet (Will load the ring matrix for BOTH (all pairs of aggregated tribes) after, but only once per shared ring)
+  }
+}
+# Loop per shared rings
+for (i in seq_along(COMIM_rings$Ring))
+{
+  # i <- 1
+  shared_ring <- COMIM_rings$Ring[i]
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",shared_ring,".BOTH_",stack_name,"_",m,".RData"))
+  
+  # Merge them all in one df
+  all_mimic_mat_index <- cbind(all_mimic_mat_index, mat.index) 
+}
+    
+dim(all_mimic_mat_index) # 16,034 pairs of co-mimic OMUs
+
+# Compare to expected number of pairs
+table(list_OMU_HeIt$Ring)
+compute_pairs <- function (x) { x*(x-1)/2 }
+sum(compute_pairs(table(list_OMU_HeIt$Ring)))
+
+save(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/all_mimic_mat_index_all_ring.tribes_",stack_name,"_",m,".RData"))
+saveRDS(all_mimic_mat_index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/all_mimic_mat_index_all_ring.tribes_",stack_name,"_",m,".rds"))
+
+# Retrieve all co-mimic SCD values and non-co-mimic SCD values at the same time
+SCD_mimic <- NA # Initiate final vector to store SCD values for comimics
+Schoener_dist_matrix_no_mimic <- Schoener_dist_matrix # Copy matrix of all SCD indices for all pairs of OMUs
+for (j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+{
+  SCD_mimic[j] <- Schoener_dist_matrix[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] # Extract SCD index for this pair of comimics
+  Schoener_dist_matrix_no_mimic[all_mimic_mat_index[1,j],all_mimic_mat_index[2,j]] <- NA # Remove SCD value of comimics from matrix of non-comimics pairs
+  if (j %% 1000 == 0) {print(j)}
+}
+length(SCD_mimic) # 16,034 pairs of co-mimic OMUs
+
+save(SCD_mimic, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_mimic_all_ring.tribes_",stack_name,"_",m,".RData")) # Save final vector with all SCD values for comimics
+saveRDS(SCD_mimic, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_mimic_all_ring.tribes_",stack_name,"_",m,".rds")) # Save final vector with all SCD values for comimics
+
+# Retrieve all non-mimic SCD values
+SCD_no_mimic <- Schoener_dist_matrix_no_mimic[upper.tri(Schoener_dist_matrix_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+SCD_no_mimic <- na.omit(SCD_no_mimic) # Remove NA (the comimics pairs)
+length(SCD_no_mimic) # 328,849 pairs of non-mimic units
+
+save(SCD_no_mimic, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_no_mimic_all_ring.tribes_",stack_name,"_",m,".RData")) # Save final vector with all SCD values for non-comimics
+saveRDS(SCD_no_mimic, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_no_mimic_all_ring.tribes_",stack_name,"_",m,".rds")) # Save final vector with all SCD values for non-comimics
+
+
+# Compute mean obs SCD for each group
+load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_mimic_all_ring.tribes_",stack_name,"_",m,".RData")) # Only mimic pairs (vector format)
+load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_no_mimic_all_ring.tribes_",stack_name,"_",m,".RData")) # Only non mimic pairs (vector format)
+
+Global_mean_SCD <- mean(unit_SCD_dist) ; Global_mean_SCD # 0.942
+Global_mimic_mean_SCD <- mean(SCD_mimic) ; Global_mimic_mean_SCD # 0.884
+Global_no.mimic_mean_SCD <- mean(SCD_no_mimic) ; Global_no.mimic_mean_SCD # 0.945
+
+# Save all mean SCD values for all pairs, only co-mimics, only non-comimics
+save(Global_mean_SCD, Global_mimic_mean_SCD, Global_no.mimic_mean_SCD, file = paste0( "../outputs/Community_Structure/SchoenerD/IthoVSHelico/All_ring.tribes_Global_SCD_",stack_name,"_",m,".RData"))
+
+}
+
+
+
+
+```
+
+
+```{r}
+### Plot mean SCD obs for Itho VS Helico VS BOTH vs INTER for shared rings
+
+stack_name <- "HeIt_OMU"
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load OMU list
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+  
+# Load df of comimetic rings
+COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+nb_shared_rings <- nrow(COMIM_rings)
+
+# Initiate summary df for mean SCD across within rings
+COMIM_rings_SCD_summary_df <- data.frame("HELICO" = rep(NA,nb_shared_rings), "ITHO" = rep(NA,nb_shared_rings), "BOTH" = rep(NA,nb_shared_rings), "INTER" = rep(NA,nb_shared_rings))
+ 
+# Load mean SCD values per ring x tribes
+load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_",stack_name,"_",m,".RData")) # Save final vector with mean SCD values per ring
+# mean_SCD
+
+# Load mean SCD for shared rings, across all pairs (BOTH)
+# load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_HI.BOTH_",stack_name,"_",m,".RData")) # Save final vector with mean SCD values per ring
+# mean_SCD_HI_BOTH
+
+# Load mean SCD for shared rings, across inter-tribes pairs only (INTER)
+load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mean_SCD_HI.INTER_",stack_name,"_",m,".RData")) # Save final vector with mean SCD values per ring
+# mean_SCD_HI_INTER
+
+# Fill summary df with mean SCD values from shared rings
+for(i in 1:nrow(COMIM_rings_SCD_summary_df))
+{
+  COMIM_rings_SCD_summary_df$HELICO[i] <- as.numeric(mean_SCD[COMIM_rings$RINGH[i]])
+  COMIM_rings_SCD_summary_df$ITHO[i] <- as.numeric(mean_SCD[COMIM_rings$RINGI[i]])
+  # COMIM_rings_SCD_summary_df$BOTH[i] <- as.numeric(mean_SCD_HI_BOTH[paste0(COMIM_rings$Ring[i], ".BOTH")])
+  COMIM_rings_SCD_summary_df$INTER[i] <- as.numeric(mean_SCD_HI_INTER[paste0(COMIM_rings$Ring[i], ".INTER")])
+}
+row.names(COMIM_rings_SCD_summary_df) <- COMIM_rings$Ring
+
+# View(COMIM_rings_SCD_summary_df)
+
+# Melt to a ggplot compatible format
+COMIM_rings_SCD_summary_melted_df <- COMIM_rings_SCD_summary_df %>% 
+  mutate(Ring = row.names(COMIM_rings_SCD_summary_df)) %>%
+  pivot_longer(cols = c("HELICO", "ITHO", "INTER"), names_to = "Type", values_to = "mean_SCD")
+
+# Save (melted) df
+saveRDS(object = COMIM_rings_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/",stack_name,"_COMIM_rings_SCD_summary_df_",m,".rds"))
+saveRDS(object = COMIM_rings_SCD_summary_melted_df, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/",stack_name,"_COMIM_rings_SCD_summary_melted_df_",m,".rds"))
+
+}
+
+```
+
+
+```{r}
+
+### Plot histogram of mean SCD, and visualize position of shared ring on the plot ##
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load df of comimetic rings
+COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+
+# Load OMU list
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+# Load SCD df between rings x tribes
+HeIt_ring_cooc_df <- readRDS(file = paste0("../outputs/Community_structure/SchoenerD/HeIt_ring_cooc_df_",m,".RDS"))
+
+# Retrieve index of shared rinds comparison between tribes
+COMIM_rings$paired_ring_index <- NA
+for(i in 1: nrow(COMIM_rings))
+{
+  for (j in 1:nrow(HeIt_ring_cooc_df))
+  {
+    if ((COMIM_rings$RINGH[i] == HeIt_ring_cooc_df[j,1] || COMIM_rings$RINGH[i] == HeIt_ring_cooc_df[j,2]) 
+       && (COMIM_rings$RINGI[i] == HeIt_ring_cooc_df[j,2] || COMIM_rings$RINGI[i] == HeIt_ring_cooc_df[j,1]))
+    {
+      COMIM_rings$paired_ring_index[i] <- j
+    }
+  }
+}
+
+# Manual tuning of label heights
+if (m == "sl")
+{ 
+  # pos.seq <- c(800,700,600,600,400,300,500)
+  pos.seq <- c(300,400,600,500,700,800,600)
+} else {
+  # pos.seq <- c(900,870,840,810,780,750,720,660)
+  pos.seq <- sample(x = 500:900, size = nrow(COMIM_rings), replace = F)
+}
+
+
+pdf(file = paste0("../outputs/Community_Structure/hist_SCD_rings_HeIt_",m,".pdf"), height = 6.3, width = 6.5)
+
+# Plot histogram of all pairs of rings x tribes
+hist(HeIt_ring_cooc_df$SCD, xlab = "Schoener'S D index", main = paste0("Schoener'S D indices of mimicry ring dissimilarity of distributions\nRing type = ",m))
+
+# Highlight pairs of comimetic rings
+for (i in 1:nrow(COMIM_rings))
+{
+abline(v = HeIt_ring_cooc_df$SCD[COMIM_rings$paired_ring_index[i]], col = "red", lty = 2, lwd = 1)
+text(x = HeIt_ring_cooc_df$SCD[COMIM_rings$paired_ring_index[i]],
+     y = pos.seq[i], col = "red", labels = paste0(COMIM_rings$Ring[i]), cex=0.8) 
+text(x = HeIt_ring_cooc_df$SCD[COMIM_rings$paired_ring_index[i]],
+     y = (pos.seq[i]-35), col="red",
+     labels = round((COMIM_rings$paired_ring_index[i]/nrow(HeIt_ring_cooc_df))*100, 1) , cex = 0.8) 
+}
+
+legend(legend = c(paste0("Mean = ", round(mean(HeIt_ring_cooc_df$SCD, na.rm = T),3)), 
+                  paste0("CI 5% = ", round(quantile(HeIt_ring_cooc_df$SCD, 0.05),3)),
+                  paste0("CI 95% = ", round(quantile(HeIt_ring_cooc_df$SCD, 0.95),3))),
+       x = "topleft", cex = 1, bty ="n") 
+dev.off()
+
+}
+
+```
+
+
+
+
+```{r}
+
+### Compute global mean SCD, but only considering shared rings between Itho vs Helico for the comimics
+# For BOTH (aggregated) pairs and INTER pairs
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Load OMU list
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+# Load df of comimetic rings
+COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+
+stack_name <- "HeIt_OMU"
+# object_name <- "HeIt_OMU_mat"
+
+# Load directly the vector of SCD distances among all units
+unit_SCD_dist <- readRDS(file = paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_OMU_",m,".rds"))
+# unit_proba_stack <- readRDS(file = paste0("../input_data/Species_data/",stack_name,"_proba_stack_",m,".RDS"))
+
+# Convert distance vector to matrix
+Schoener_dist_matrix <- as.matrix(unit_SCD_dist)
+
+# Initiate empty df to store indices of pairs of comimics
+all_HI_mimic_BOTH_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) 
+all_HI_mimic_INTER_mat_index <- data.frame(matrix(ncol = 0, nrow = 2))
+
+# Loop per shared rings
+for (i in seq_along(COMIM_rings$Ring))
+{
+  # i <- 2
+  shared_ring <- COMIM_rings$Ring[i]
+  # load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",shared_ring,".BOTH_",stack_name,"_",m,".RData"))
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",shared_ring,".INTER_",stack_name,"_",m,".RData"))
+
+  # Merge them all in one df
+  # all_HI_mimic_BOTH_mat_index <- cbind(all_HI_mimic_BOTH_mat_index, mat.index) 
+  all_HI_mimic_INTER_mat_index <- cbind(all_HI_mimic_INTER_mat_index, mat.index.INTER) 
+}
+    
+# dim(all_HI_mimic_BOTH_mat_index) # 5,441 pairs of co-mimic OMUs in aggregated shared rings
+dim(all_HI_mimic_INTER_mat_index) # 941 pairs of Inter-tribe OMUs in shared rings
+
+# saveRDS(all_HI_mimic_BOTH_mat_index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/all_HI_mimic_BOTH_mat_index_",stack_name,"_",m,".rds"))
+saveRDS(all_HI_mimic_INTER_mat_index, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/all_HI_mimic_INTER_mat_index_",stack_name,"_",m,".rds"))
+
+# Retrieve all co-mimic SCD values and non-co-mimic SCD values at the same time
+# SCD_mimic_BOTH <- NA # Initiate final vector to store SCD values for comimics
+SCD_mimic_INTER <- NA # Initiate final vector to store SCD values for comimics
+# Schoener_dist_matrix_no_mimic_BOTH <- Schoener_dist_matrix # Copy matrix of all SCD indices for all pairs of OMUs
+Schoener_dist_matrix_no_mimic_INTER <- Schoener_dist_matrix # Copy matrix of all SCD indices for all pairs of OMUs
+
+# # Remove values from pairs of OMU that are not in the shared rings
+# shared_ring_OMU_matches <- str_detect(string = colnames(Schoener_dist_matrix), pattern = paste0(c(COMIM_rings$RINGH, COMIM_rings$RINGI), collapse = "|"))
+# Schoener_dist_matrix_no_mimic_BOTH[!shared_ring_OMU_matches, ] <- NA
+# Schoener_dist_matrix_no_mimic_BOTH[ , !shared_ring_OMU_matches] <- NA
+# Schoener_dist_matrix_no_mimic_INTER[!shared_ring_OMU_matches, ] <- NA
+# Schoener_dist_matrix_no_mimic_INTER[ , !shared_ring_OMU_matches] <- NA
+
+# # Extract SCD values for BOTH pairs
+# for (j in 1:ncol(all_HI_mimic_BOTH_mat_index)) # For all pairs of comimics
+# {
+#   # For BOTH pairs
+#   SCD_mimic_BOTH[j] <- Schoener_dist_matrix[all_HI_mimic_BOTH_mat_index[1,j],all_HI_mimic_BOTH_mat_index[2,j]] # Extract SCD index for this pair of comimics
+#   # Schoener_dist_matrix_no_mimic_BOTH[all_HI_mimic_BOTH_mat_index[1,j],all_HI_mimic_BOTH_mat_index[2,j]] <- NA # Remove SCD value of comimics from matrix of non-comimics pairs
+#   if (j %% 1000 == 0) {print(j)}
+# }
+# length(SCD_mimic_BOTH) # 5,441 pairs of co-mimic OMUs
+
+# Extract SCD values for INTER pairs
+for (j in 1:ncol(all_HI_mimic_INTER_mat_index)) # For all pairs of comimics
+{
+  # For INTER pairs
+  SCD_mimic_INTER[j] <- Schoener_dist_matrix[all_HI_mimic_INTER_mat_index[1,j],all_HI_mimic_INTER_mat_index[2,j]] # Extract SCD index for this pair of comimics
+  # Schoener_dist_matrix_no_mimic_INTER[all_HI_mimic_INTER_mat_index[1,j],all_HI_mimic_INTER_mat_index[2,j]] <- NA # Remove SCD value of comimics from matrix of non-comimics pairs
+  if (j %% 100 == 0) {print(j)}
+}
+length(SCD_mimic_INTER) # 941 pairs of co-mimic OMUs
+
+# Save final vector with all SCD values for comimics
+# saveRDS(SCD_mimic_BOTH, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_HI_mimic_BOTH_",stack_name,"_",m,".rds"))
+saveRDS(SCD_mimic_INTER, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_HI_mimic_INTER_",stack_name,"_",m,".rds"))
+
+## Do not retrieve all non-mimic SCD values just for shared rings as it does not make sense to compare mimic pairs with only the non-mimetic of the shared rings
+# SCD_no_mimic_BOTH <- Schoener_dist_matrix_no_mimic_BOTH[upper.tri(Schoener_dist_matrix_no_mimic_BOTH)] # Extract only one side of the triangle to avoid duplicate values of pairs
+# SCD_no_mimic_BOTH <- na.omit(SCD_no_mimic_BOTH) # Remove NA (the comimics pairs)
+# length(SCD_no_mimic_BOTH) # 13,669 pairs of non-mimic units
+# # Save final vector with all SCD values for non-comimics
+# saveRDS(SCD_no_mimic, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_no_mimic_",stack_name,"_",m,".rds")) 
+
+# Compute mean obs SCD for each group
+# load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/",stack_name,"_SCD_dist_",m,".RData")) # All SCD indices from all rings (distance format)
+# SCD_mimic_BOTH <- readRDS(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_HI_mimic_BOTH_",stack_name,"_",m,".rds")) # Only BOTH mimic pairs from shared rings (vector format)
+SCD_mimic_INTER <- readRDS(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_HI_mimic_INTER_",stack_name,"_",m,".rds")) # Only INTER mimic pairs from shared rings (vector format)
+load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/SCD_no_mimic_all_ring.tribes_",stack_name,"_",m,".RData")) # Only non mimic pairs from all rings (vector format)
+
+## Not sure how the global mean across OMU from shared rings, and non-mimic from shared rings is relevant.
+# Permutations are carried out across all OMUS anyway, so better compare to all other non-mimetic pairs
+Global_mean_SCD <- mean(unit_SCD_dist) ; Global_mean_SCD # 0.942 (Across all pairs)
+# Global_mimic_BOTH_mean_SCD <- mean(SCD_mimic_BOTH) ; Global_mimic_BOTH_mean_SCD # 0.878
+Global_mimic_INTER_mean_SCD <- mean(SCD_mimic_INTER) ; Global_mimic_INTER_mean_SCD # 0.839
+Global_no.mimic_mean_SCD <- mean(SCD_no_mimic) ; Global_no.mimic_mean_SCD # 0.945
+
+# Save all mean SCD values for all pairs, only co-mimics, only non-comimics
+save(Global_mean_SCD,  Global_mimic_INTER_mean_SCD, Global_no.mimic_mean_SCD, file = paste0( "../outputs/Community_Structure/SchoenerD/IthoVSHelico/All_shared_rings_Global_SCD_",stack_name,"_",m,".RData"))
+
+}
+
+
+```
+
+```{r}
+
+#### Compute null distribution from permutations for within-tribes (Helico, Itho) and inter-tribes (BOTH and INTER pairs)
+
+# Set seed for reproducibility
+set.seed(seed = 1234)
+
+for(m in c("ss", "sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+
+# Table to stock SCD values
+tic("start")
+  
+stack_name <- "HeIt_OMU"
+  
+# Load OMU list
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+# Load df of comimetic rings
+COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+
+#list_OMU_HeIt$ring_simple<-list_OMU_HeIt$ring_simple[,1]
+mimicry.list.COMIM_HI <- COMIM_rings$Ring
+
+# Load stack of OMU used to compute SCD indices
+HeIt_OMU_proba_stack <- readRDS(file = paste0("../input_data/Species_data/HeIt_OMU_proba_stack_",m,".RDS"))
+
+# Load the distance matrix with all SCD across OMU pairs
+unit_SCD_dist <- readRDS(file = paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_OMU_",m,".rds"))
+Schoener_dist_matrix <- as.matrix(unit_SCD_dist) 
+
+# Initiate SCD summary table
+SCD_summary_table <- data.frame(Comim_Itho = c(0,0,0), Comim_Helico = c(0,0,0), Comim_Inter = c(0,0,0), Comim_Both = c(0,0,0))
+rownames(SCD_summary_table) <- c("SCD_obs", "SCD_permu", "pvalue")
+
+
+##Itho
+tic("Itho")
+
+### SCD OBS
+Itho_SCD_vec <- c()
+vec_counter <- 0
+list_OMU_Itho <-list_OMU_HeIt[list_OMU_HeIt$tribe=="ITHO",] # Extract list of OMU for Ithomiini only
+
+p <- progress_estimated(nrow(list_OMU_Itho), min_time = 10)
+
+# Retrieve SCD values from pairs of comimetic Ithomiini
+for (i in 1:nrow(list_OMU_Itho))
+{
+  p$pause(0.1)$tick()$print()
+  
+  # Extract SCD values for pairs of comimetic Ithomiini only
+  for(j in 1:nrow(list_OMU_Itho))
+  {
+    if(list_OMU_Itho$full_tag[i] != list_OMU_Itho$full_tag[j] && list_OMU_Itho$Ring[i] == list_OMU_Itho$Ring[j])
+    {
+      ref_1 <- as.numeric(rownames(list_OMU_Itho[i,]))
+      ref_2 <- as.numeric(rownames(list_OMU_Itho[j,]))
+      SCD_ref <- Schoener_dist_matrix[ref_1,ref_2]
+      vec_counter <- vec_counter+1
+      Itho_SCD_vec[vec_counter] <- SCD_ref
+    }    
+  }
+}
+# Compute mean across all observed SCD values from pairs of mimetic Ithomiini
+SCD_summary_table$Comim_Itho[1] <- mean(Itho_SCD_vec)
+
+###PERMUTATIONS
+
+mimicry.list <- unique(list_OMU_Itho$Ring)
+
+## Start the loop for permutations
+SCD_mimic_null <- SCD_no_mimic_null <- NA # Create vectors to store permuted mean SCD values for co-mimics and non-comimics
+mean_SCD_null <- matrix(ncol = length(mimicry.list), nrow = 0) # Create matrix to store mean permuted SCD values for each mimicry ring for each permutation
+
+p <- progress_estimated(999, min_time=10)
+# p <- progress_estimated(10, min_time=10)
+
+for (k in 1:999) # 999 simulations/permutations
+# for (k in 1:10) # 10 simulations/permutations for testing
+{ 
+  p$pause(0.1)$tick()$print()
+  
+  # k <- 1
+  
+  ## Shuffle randomly mimicry ring among OMUs
+  shuffle.list.unit <- list_OMU_Itho
+  shuffle.list.unit$Ring <- sample(as.character(shuffle.list.unit$Ring))
+  
+  # # Check if number of unit per ring is preserved
+  # table(list_OMU_Itho$Ring)
+  # table(shuffle.list.unit$Ring)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+  mimicry.list <- as.character(unique(list_OMU_Itho$Ring)) # 44 Mimicry rings ss ; 39 Mimicry rings sl
+  
+  mean_SCD <- NA
+  for (i in 1:length(mimicry.list)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_Itho$full_tag[shuffle.list.unit$Ring == ring])
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_IT_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_SCD[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_IT_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      SCD <- NA # Initiate the vector used to store all SCD values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        SCD[j] <- Schoener_dist_matrix[mat.index[1,j],mat.index[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+      }
+      mean_SCD[i]  <- mean(SCD) # Compute mean SCD for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_SCD) <- mimicry.list
+  mean_SCD_null <- rbind(mean_SCD_null,mean_SCD) # Store the mean SCD vector into the matrix of permutations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list)) { # Per mimicry rings
+    ring <- mimicry.list[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_IT_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index,mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) # 14 659 pairs of mimic units
+  
+  # Retrieve all mimic values and non-co-mimic SCD values at the same time
+  SCD_mimic <- NA # Initiate final vector to store SCD values for comimics
+  Schoener_dist_matrix_no_mimic <- Schoener_dist_matrix # Copy matrix of all SCD indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    SCD_mimic[j] <- Schoener_dist_matrix[all_mimic_mat_index[1,j], all_mimic_mat_index[2,j]] # Extract SCD index for this pair of comimics
+    Schoener_dist_matrix_no_mimic[all_mimic_mat_index[1,j], all_mimic_mat_index[2,j]] <- NA # Remove SCD value of comimics from matrix of non-comimics pairs
+  }
+  # length(SCD_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  SCD_no_mimic <- Schoener_dist_matrix_no_mimic[upper.tri(Schoener_dist_matrix_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  SCD_no_mimic <- na.omit(SCD_no_mimic) # Remove NA (the comimics pairs)
+  # length(SCD_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  SCD_mimic_null[k] <- mean(SCD_mimic)
+  SCD_no_mimic_null[k] <- mean(SCD_no_mimic)
+  
+  if (k %% 10 == 0)
+  {
+    cat(paste0(Sys.time(), " - Ithomiini - Permutation n°", k," out of 1000\n"))
+  }
+  
+  save(mean_SCD_null, SCD_mimic_null, SCD_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_IT_",m,".RData"))
+}
+
+summary(mean_SCD_null)     # Per mimicry ring
+summary(SCD_mimic_null)    # For all comimic pairs
+summary(SCD_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+SCD_summary_table$Comim_Itho[2] <- mean(SCD_mimic_null) # mean SCD under null hypothesis
+
+for(i in 1:length(SCD_mimic_null))
+{
+  if(SCD_summary_table$Comim_Itho[1] < rank(SCD_mimic_null)[i])
+  {
+    SCD_summary_table$Comim_Itho[3] <- 1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && SCD_summary_table$Comim_Itho[1] < rank(SCD_mimic_null)[i+1] && SCD_summary_table$Comim_Itho[1] > rank(SCD_mimic_null)[i-1])
+  {
+    SCD_summary_table$Comim_Itho[3] <- 1/i #pvalue
+    break
+  }
+}
+toc()
+
+##Helico
+
+tic("Helico")
+
+Helico_SCD_vec <- c()
+vec_counter <- 0
+list_OMU_Helico <- list_OMU_HeIt[list_OMU_HeIt$tribe=="HELICO",] # Extract Helico OMU only
+
+p<-progress_estimated(nrow(list_OMU_Helico), min_time = 10)
+
+# Extract SCD values for pairs of comimetic Helico only
+for (i in 1:nrow(list_OMU_Helico))
+{
+  p$pause(0.1)$tick()$print()
+  for(j in 1:nrow(list_OMU_Helico))
+  {
+    if(i!=j && list_OMU_Helico$Ring[i]==list_OMU_Helico$Ring[j])
+    {
+      ref_1 <- as.numeric(rownames(list_OMU_Helico[i,]))
+      ref_2 <- as.numeric(rownames(list_OMU_Helico[j,]))
+      SCD_ref <- Schoener_dist_matrix[ref_1, ref_2]
+      vec_counter <- vec_counter + 1
+      Helico_SCD_vec[vec_counter] <- SCD_ref
+    }    
+  }
+}
+SCD_summary_table$Comim_Helico[1]<-mean(Helico_SCD_vec)
+
+###PERMUTATIONS
+mimicry.list <- unique(list_OMU_Helico$Ring)
+
+## Start the loop for permutations
+SCD_mimic_null <- SCD_no_mimic_null <- NA # Create vectors to store permuted mean SCD values for co-mimics and non-comimics
+mean_SCD_null <- matrix(ncol = length(mimicry.list), nrow = 0) # Create matrix to store mean permuted SCD values for each mimicry ring for each permutation
+
+p<-progress_estimated(999, min_time=10)
+# p<-progress_estimated(10, min_time=10)
+
+for (k in 1:999) # 999 simulations/permutations
+# for (k in 1:10) # 10 simulations/permutations for tests
+{ 
+  p$pause(0.1)$tick()$print()
+  
+  # k <- 1
+  
+  ## Shuffle mimicry ring among OMUs
+  shuffle.list.unit <- list_OMU_Helico
+  shuffle.list.unit$Ring <- sample(as.character(shuffle.list.unit$Ring))
+  
+  # # Check if number of unit per ring is preserved
+  # table(list_OMU_Helico$Ring)
+  # table(shuffle.list.unit$Ring)
+  
+  ## Generate the new Mimicry rings Richness Stack with random attribution of OMUs to mimicry ring
+  
+  # Mimicry list
+  mimicry.list <- as.character(unique(list_OMU_Helico$Ring)) # 20 Mimicry rings sl ; 38 Mimicry rings ss
+  
+  mean_SCD <- NA
+  for (i in 1:length(mimicry.list)) # Per mimicry rings
+  { 
+    # i <-  1
+    ring <- mimicry.list[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_Helico$full_tag[shuffle.list.unit$Ring == ring])
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    if (length(tags)==1) # Case with only one OMU in the mimicry ring. Impossible to compute pairwise distances
+    { 
+      mat.index <- data.frame(matrix(nrow = 2, ncol = 0)) # Empty df of pairs coordinates
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HE_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      mean_SCD[i] <- NA
+    } else { # Case with at least 2 OMUs
+      mat.index <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+      save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HE_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+      SCD <- NA # Initiate the vector used to store all SCD values
+      for(j in 1:ncol(mat.index)) # For each pair of OMUs
+      {
+        SCD[j] <- Schoener_dist_matrix[mat.index[1,j], mat.index[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+      }
+      mean_SCD[i]  <- mean(SCD) # Compute mean SCD for all pairs of this mimicry ring and store it in final vector
+    }
+    
+    # print(i)
+  }
+  names(mean_SCD) <- mimicry.list
+  mean_SCD_null <- rbind(mean_SCD_null, mean_SCD) # Store the mean SCD vector into the matrix of permutations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list)) { # Per mimicry rings
+    ring <- mimicry.list[i]
+    load(file =  paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HE_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index <- cbind(all_mimic_mat_index, mat.index) # Merge them all in one df
+  }
+  # dim(all_mimic_mat_index) # 14 659 pairs of mimic units
+  
+  # Retrieve all mimic values and non-co-mimic SCD values at the same time
+  SCD_mimic <- NA # Initiate final vector to store SCD values for comimics
+  Schoener_dist_matrix_no_mimic <- Schoener_dist_matrix # Copy matrix of all SCD indices for all pairs of OMUs
+  for(j in 1:ncol(all_mimic_mat_index)) # For all pairs of comimics
+  {
+    SCD_mimic[j] <- Schoener_dist_matrix[all_mimic_mat_index[1,j], all_mimic_mat_index[2,j]] # Extract SCD index for this pair of comimics
+    Schoener_dist_matrix_no_mimic[all_mimic_mat_index[1,j], all_mimic_mat_index[2,j]] <- NA # Remove SCD value of comimics from matrix of non-comimics pairs
+  }
+  # length(SCD_mimic) # 14 659 pairs of mimic units
+  
+  # Retrieve all non-mimic values
+  SCD_no_mimic <- Schoener_dist_matrix_no_mimic[upper.tri(Schoener_dist_matrix_no_mimic)] # Extract only one side of the triangle to avoid duplicate values of pairs
+  SCD_no_mimic <- na.omit(SCD_no_mimic) # Remove NA (the comimics pairs)
+  # length(SCD_no_mimic) # 291 494 pairs of non-mimic units
+  
+  # Save global mean computation into final vectors
+  SCD_mimic_null[k] <- mean(SCD_mimic)
+  SCD_no_mimic_null[k] <- mean(SCD_no_mimic)
+  
+  if (k %% 10 == 0)
+  {
+    cat(paste0(Sys.time(), " - Heliconiini - Permutation n°", k," out of 1000\n"))
+  }
+  save(mean_SCD_null, SCD_mimic_null, SCD_no_mimic_null, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_HE_",m,".RData"))
+}
+
+summary(mean_SCD_null)     # Per mimicry ring
+summary(SCD_mimic_null)    # For all comimic pairs
+summary(SCD_no_mimic_null) # For all non-comimic pairs
+print(paste0("Done for all OMU"))
+
+SCD_summary_table$Comim_Helico[2] <- mean(SCD_mimic_null) #SCD under null hypothesis
+
+for(i in 1:length(SCD_mimic_null))
+{
+  if(SCD_summary_table$Comim_Helico[1] < rank(SCD_mimic_null)[i])
+  {
+    SCD_summary_table$Comim_Helico[3] <- 1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && SCD_summary_table$Comim_Helico[1] < rank(SCD_mimic_null)[i+1] && SCD_summary_table$Comim_Helico[1] > rank(SCD_mimic_null)[i-1])
+  {
+    SCD_summary_table$Comim_Helico[3] <- 1/i #pvalue
+    break
+  }
+}
+toc()
+
+
+### Inter & BOTH pairs for shared rings
+
+tic("Inter")
+
+Inter_SCD_vec <- c()
+vec_counter <- 0
+
+p <- progress_estimated(nrow(list_OMU_HeIt), min_time = 10)
+
+# Extract SCD values only for Inter-tribes comimetic pairs of OMUs 
+for (i in 1:nrow(list_OMU_HeIt))
+{
+  p$pause(0.1)$tick()$print()
+  
+  for(j in 1:nrow(list_OMU_HeIt))
+  {
+    # if(list_OMU_HeIt$ring_simple[i]=="ELZUNIA") #to not repeat
+    # {next}
+    
+    # Extract pairs only if in the same ring, and from different tribes
+    if(list_OMU_HeIt$Ring[i] == list_OMU_HeIt$Ring[j] && list_OMU_HeIt$tribe[i] != list_OMU_HeIt$tribe[j])
+    {
+      ref_1 <- as.numeric(rownames(list_OMU_HeIt[i,]))
+      ref_2 <- as.numeric(rownames(list_OMU_HeIt[j,]))
+      SCD_ref <- Schoener_dist_matrix[ref_1,ref_2]
+      vec_counter <- vec_counter + 1
+      Inter_SCD_vec[vec_counter] <- SCD_ref
+    } 
+    # if(list_OMU_HeIt$ring_simple[i]=="PAVONII" | list_OMU_HeIt$ring_simple[i]=="HUMBOLDT")  #particular case of ELZUNIA comim with 2 ITHO rings
+    # {
+    #   if( list_OMU_HeIt$ring_simple[j]=="ELZUNIA")
+    #   {
+    #   ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+    #   ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+    #   SCD_ref<-Schoener_dist_matrix[ref_1,ref_2]
+    #   vec_counter<-vec_counter
+    #   Inter_SCD_vec[vec_counter]<-SCD_ref
+    #   }
+    # }
+  }
+}
+SCD_summary_table$Comim_Inter[1] <- mean(Inter_SCD_vec)
+
+length(Inter_SCD_vec) # Does not account for symmetry, so number of SCD is the double of the true number of 941 (sl) unique pairs 
+
+# Extract SCD values only for all comimetic pairs (BOTH) in shared rings
+list_OMU_shared_rings <- list_OMU_HeIt[list_OMU_HeIt$Ring %in% mimicry.list.COMIM_HI, ]
+OMU_shared_rings_matches <- colnames(Schoener_dist_matrix) %in% list_OMU_shared_rings$full_tag
+Schoener_dist_matrix_shared_rings <- Schoener_dist_matrix[OMU_shared_rings_matches, OMU_shared_rings_matches]
+
+Both_SCD_vec <- c()
+vec_counter <- 0
+
+p <- progress_estimated(nrow(list_OMU_shared_rings), min_time = 10)
+
+for (i in 1:nrow(list_OMU_shared_rings))
+{
+  p$pause(0.1)$tick()$print()
+  
+  for(j in 1:nrow(list_OMU_shared_rings))
+  {
+    # Extract pairs only if in the same ring, and from different OMUs
+    if(list_OMU_shared_rings$Ring[i] == list_OMU_shared_rings$Ring[j] && list_OMU_shared_rings$full_tag[i] != list_OMU_shared_rings$full_tag[j])
+    {
+      ref_1 <- as.numeric(rownames(list_OMU_shared_rings[i,]))
+      ref_2 <- as.numeric(rownames(list_OMU_shared_rings[j,]))
+      SCD_ref <- Schoener_dist_matrix[ref_1,ref_2]
+      vec_counter <- vec_counter + 1
+      Both_SCD_vec[vec_counter] <- SCD_ref
+    } 
+    # if(list_OMU_HeIt$ring_simple[i]=="PAVONII" | list_OMU_HeIt$ring_simple[i]=="HUMBOLDT")  #particular case of ELZUNIA comim with 2 ITHO rings
+    # {
+    #   if( list_OMU_HeIt$ring_simple[j]=="ELZUNIA")
+    #   {
+    #   ref_1<-as.numeric(rownames(list_OMU_HeIt[i,]))
+    #   ref_2<-as.numeric(rownames(list_OMU_HeIt[j,]))
+    #   SCD_ref<-Schoener_dist_matrix[ref_1,ref_2]
+    #   vec_counter<-vec_counter
+    #   Inter_SCD_vec[vec_counter]<-SCD_ref
+    #   }
+    # }
+  }
+}
+SCD_summary_table$Comim_Both[1] <- mean(Both_SCD_vec)
+
+length(Both_SCD_vec) # Does not account for symmetry, so number of SCD is the double of the true number of 5,441 (sl) unique pairs
+
+
+###PERMUTATIONS
+
+## Compute null SCD for Inter-tribe pairs (INTER), and all pairs in shared rings (BOTH)
+
+## Start the loop for permutations
+SCD_mimic_null.BOTH <- NA # Create vectors to store permuted mean SCD values for co-mimics and non-comimics
+SCD_mimic_null.INTER <- NA # Create vectors to store permuted mean SCD values for co-mimics and non-comimics
+mean_SCD_BOTH_null <- matrix(ncol = length(mimicry.list.COMIM_HI), nrow = 0) # Create matrix to store mean permuted SCD values for each mimicry ring for each permutation
+mean_SCD_INTER_null <- matrix(ncol = length(mimicry.list.COMIM_HI), nrow = 0) # Create matrix to store mean permuted SCD values for each mimicry ring for each permutation
+
+
+p<-progress_estimated(999, min_time = 10)
+# p<-progress_estimated(10, min_time = 10)
+
+for (k in 1:999) # 999 simulations/permutations
+# for (k in 1:10) # 10 simulations/permutations for tests
+{ 
+  p$pause(0.1)$tick()$print()
+  # k <- 1
+  
+  ## Shuffle mimicry ring among units, but independently between tribe-blocks
+  # Heliconiini OMUs can only obtain an Heliconiini ring
+  # Ithomiini OMUs can only obtain an Ithomiini ring
+
+  shuffle.list.unit <- list_OMU_HeIt
+  shuffle.list.unit$Ring[shuffle.list.unit$tribe=="HELICO"] <- sample(as.character(shuffle.list.unit$Ring[shuffle.list.unit$tribe=="HELICO"])) # shuffle for Heliconiini
+  shuffle.list.unit$Ring[shuffle.list.unit$tribe=="ITHO"] <- sample(as.character(shuffle.list.unit$Ring[shuffle.list.unit$tribe=="ITHO"])) # shuffle for Heliconiini
+  
+  # # Check if number of unit per ring is preserved
+  # table(list_OMU_HeIt$Ring)
+  # table(shuffle.list.unit$Ring)
+  
+  # Loop per mimicry rings
+  mean_SCD.BOTH <- NA
+  mean_SCD.INTER <- NA
+  for (i in 1:length(mimicry.list.COMIM_HI)) # Per mimicry rings
+  { 
+    # i <-  2
+    ring <- mimicry.list.COMIM_HI[i]
+    
+    # Get names and indices of all units/OMUs for this ring
+    tags <- as.character(list_OMU_HeIt$full_tag[shuffle.list.unit$Ring == ring])
+    
+    # if (ring=="PAVONII"|ring=="HUMBOLDT") #specific case of ELZUNIA, comim for two rings
+    # {
+    #   tags2<-as.character(list_OMU_HeIt$biomodTag[shuffle.list.unit$ring_simple == "ELZUNIA"])
+    # tags<-c(tags,tags2)
+    # }
+    
+    index <- which(names(HeIt_OMU_proba_stack) %in% tags)
+    
+    # Create matrix of all pairwise combinations for BOTH
+    mat.index.BOTH <- combn(x = index, m = 2, FUN = c) # Get all combinations possibles for pairs of OMUs indices
+    save(mat.index, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HEIT.BOTH_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+    
+    # Detect tribes of the OMUs
+    tags_HELICO <- str_detect(string = tags, pattern = ".HELICO$")
+    index_HELICO <- index[tags_HELICO]
+    tags_ITHO <- str_detect(string = tags, pattern = ".ITHO$")
+    index_ITHO <- index[tags_ITHO]
+      
+    # Create matrix of all Inter-tribe pairs
+    mat.index.INTER <- t(expand.grid(index_HELICO, index_ITHO))
+    save(mat.index.INTER, file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HEIT.INTER_",m,".RData")) # Save temp mat indices df to be used later to merge for all rings
+    
+    # Extract SCD for all pairs
+    SCD.BOTH <- NA # Initiate the vector used to store all SCD values
+    for(j in 1:ncol(mat.index.BOTH)) # For each pair of OMUs
+      {
+        SCD.BOTH[j] <- Schoener_dist_matrix[mat.index.BOTH[1,j],mat.index.BOTH[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+      }
+    mean_SCD.BOTH[i]  <- mean(SCD.BOTH) # Compute mean SCD for all pairs of this mimicry ring and store it in final vector
+
+    # Extract SCD for inter-tribe pairs
+    SCD.INTER <- NA # Initiate the vector used to store all SCD values
+    for(j in 1:ncol(mat.index.INTER)) # For each pair of OMUs
+      {
+        SCD.INTER[j] <- Schoener_dist_matrix[mat.index.INTER[1,j],mat.index.INTER[2,j]] # Extract Schoener'S D index from the complete matrix of SCD indices
+      }
+    mean_SCD.INTER[i]  <- mean(SCD.INTER) # Compute mean SCD for all pairs of this mimicry ring and store it in final vector
+ 
+    # print(i)
+  }
+  names(mean_SCD.BOTH) <- names(mean_SCD.INTER) <-  mimicry.list.COMIM_HI
+  mean_SCD_BOTH_null <- rbind(mean_SCD_BOTH_null,mean_SCD.BOTH) # Store the mean SCD vector into the matrix of permutations, as a row
+  mean_SCD_INTER_null <- rbind(mean_SCD_INTER_null,mean_SCD.INTER) # Store the mean SCD vector into the matrix of permutations, as a row
+  
+  # Retrieve all mimic coordinates
+  all_mimic_mat_index.BOTH <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  all_mimic_mat_index.INTER <- data.frame(matrix(ncol = 0, nrow = 2)) # Generate empty df to store indices of pairs of comimics
+  for (i in 1:length(mimicry.list.COMIM_HI)) 
+  { # Per mimicry rings
+    ring <- mimicry.list.COMIM_HI[i]
+    
+   # For all pairs (BOTH)
+    load(file = paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HEIT.BOTH_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index.BOTH <- cbind(all_mimic_mat_index.BOTH, mat.index.BOTH) # Merge them all in one df
+  
+  
+  # For inter-tribe pairs (INTER)
+    load(file =  paste0("../outputs/Community_Structure/Permutations/SchoenerD/simul_mat.index.",ring,"_OMU_HEIT.INTER_",m,".RData")) # Load the matrix of indices of pairs of comimics for this ring
+    all_mimic_mat_index.INTER <- cbind(all_mimic_mat_index.INTER, mat.index.INTER) # Merge them all in one df
+    
+  }
+  
+  # dim(all_mimic_mat_index.BOTH) 
+  # dim(all_mimic_mat_index.INTER) 
+  
+  # Retrieve all mimic values
+  SCD_mimic.BOTH <- NA # Initiate final vector to store SCD values for comimics
+  SCD_mimic.INTER <- NA # Initiate final vector to store SCD values for comimics
+  
+  for(j in 1:ncol(all_mimic_mat_index.BOTH)) # For all pairs of comimics
+  {
+    SCD_mimic.BOTH[j] <- Schoener_dist_matrix[all_mimic_mat_index.BOTH[1,j], all_mimic_mat_index.BOTH[2,j]] # Extract SCD index for this pair of comimics
+  }
+  
+  for(j in 1:ncol(all_mimic_mat_index.INTER)) # For all pairs of comimics
+  {
+    SCD_mimic.INTER[j] <- Schoener_dist_matrix[all_mimic_mat_index.INTER[1,j], all_mimic_mat_index.INTER[2,j]] # Extract SCD index for this pair of comimics
+  }
+  # length(SCD_mimic.BOTH) 
+  # length(SCD_mimic.INTER) 
+  
+  # Save global mean computation into final vectors
+  SCD_mimic_null.BOTH[k] <- mean(SCD_mimic.BOTH)
+  SCD_mimic_null.INTER[k] <- mean(SCD_mimic.INTER)
+  
+    if (k %% 10 == 0)
+  {
+    cat(paste0(Sys.time(), " - Inter-tribes - Permutation n°", k," out of 1000\n"))
+  }
+  
+  save(mean_SCD_BOTH_null, SCD_mimic_null.BOTH, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_HEIT.BOTH_",m,".RData"))
+  save(mean_SCD_INTER_null, SCD_mimic_null.INTER, file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_HEIT.INTER_",m,".RData"))
+}
+
+## Results for all pairs (BOTH) in shared rings
+summary(mean_SCD_BOTH_null)     # Per mimicry ring
+summary(SCD_mimic_null.BOTH)    # For all comimic pairs in shared rings
+
+## Results for inter-tribes pairs (INTER) in shared rings
+summary(mean_SCD_INTER_null)     # Per mimicry ring
+summary(SCD_mimic_null.INTER)    # For all intertribe comimic pairs
+
+print(paste0("Done for all OMU"))
+
+SCD_summary_table$Comim_Inter[2] <- mean(SCD_mimic_null.INTER) # SCD under null hypothesis
+SCD_summary_table$Comim_Both[2] <- mean(SCD_mimic_null.BOTH) # SCD under null hypothesis
+
+# Compute p-values from quantiles
+for(i in 1:length(SCD_mimic_null.INTER))
+{
+  if(SCD_summary_table$Comim_Inter[1] < rank(SCD_mimic_null.INTER)[i])
+  {
+    SCD_summary_table$Comim_Inter[3] <- 1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && SCD_summary_table$Comim_Inter[1] < rank(SCD_mimic_null.INTER)[i+1] && SCD_summary_table$Comim_Inter[1] > rank(SCD_mimic_null.INTER)[i-1])
+  {
+    SCD_summary_table$Comim_Inter[3] <- 1/i #pvalue
+    break
+  }
+  
+  if(SCD_summary_table$Comim_Both[1] < rank(SCD_mimic_null.BOTH)[i])
+  {
+    SCD_summary_table$Comim_Both[3] <- 1/1000 #pvalue
+    break
+  }
+  
+  if(i!=1 && SCD_summary_table$Comim_Both[1] < rank(SCD_mimic_null.BOTH)[i+1] && SCD_summary_table$Comim_Both[1] > rank(SCD_mimic_null.BOTH)[i-1])
+  {
+    SCD_summary_table$Comim_Both[3] <- 1/i #pvalue
+    break
+  }
+}
+toc()
+
+
+
+save(SCD_summary_table, file = paste0("../outputs/Community_Structure/SCD_summary_table_OMU_HeIt_",m,".Rdata"))
+
+toc()
+
+
+}
+
+```
+
+
+```{r}
+##### Plot results of spatial cooccurrence tests #####
+
+# Clean environment
+rm(list = ls())
+
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+
+### Loop per type of phenotypic groups
+for (m in c("ss", "sl"))
+# for (m in c("sl"))
+{
+  # m <- "ss"
+  # m <- "sl"
+  
+  #Schoener dist mat
+  Schoener_dist_matrix <- readRDS(file = paste0("../outputs/Community_structure/SchoenerD/Schoener_dist_matrix_OMU_",m,".rds"))  
+
+  
+  ##### 1/ Load stuff ####
+  # Load OMU list
+list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+  
+  # ## Load mimetic groups update table
+  # Mimetic_classification_update <- read_excel("Mimetic_classification_update.xlsx")
+  
+  ## Load Heliconiini outputs from Script 32
+
+  # Load mean SCD obs values for all pairs, comimics, and non comimics (for Helico?)
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/All_ring.tribes_Global_SCD_HeIt_OMU_",m,".RData")) 
+    load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/mean_SCD_HeIt_OMU_",m,".RData"))
+  
+  Helico_SCD_vec <- c()
+  vec_counter <- 0
+  list_OMU_Helico <- list_OMU_HeIt[list_OMU_HeIt$tribe=="HELICO",] # Extract Helico OMU only
+
+
+# Extract SCD values for pairs of comimetic Helico only
+  for (i in 1:nrow(list_OMU_Helico))
+  {
+    for (j in 1:nrow(list_OMU_Helico))
+    {
+      if (i != j && list_OMU_Helico$Ring[i] == list_OMU_Helico$Ring[j])
+      {
+        ref_1 <- as.numeric(rownames(list_OMU_Helico[i, ]))
+        ref_2 <- as.numeric(rownames(list_OMU_Helico[j, ]))
+        SCD_ref <- Schoener_dist_matrix[ref_1, ref_2]
+        vec_counter <- vec_counter + 1
+        Helico_SCD_vec[vec_counter] <- SCD_ref
+      }
+    }
+  }
+  Helico_global_SCD_obs <- mean(Helico_SCD_vec)
+  Helico_group_SCD_obs <- mean_SCD[str_detect(names(mean_SCD), "HELICO")]
+  
+  
+  # Should be similar to:
+  load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_HE_",m,".RData"))
+  Helico_group_SCD_null <- mean_SCD_null
+  Helico_global_SCD_null <- SCD_mimic_null
+  rm(mean_SCD_null, SCD_mimic_null, SCD_no_mimic_null)
+
+  # summary(Helico_global_SCD_null_old) # Does not seem compatible with mean overall value of 0.8926!
+  # summary(Helico_global_SCD_null) # Seems compatible with mean overall value of 0.8926
+  
+  
+  ## Load Ithomiini outputs (from Doré et al., 2023) 
+  
+  # Only for "ss", because Ithomiini groups have not been merged besides shared rings
+  if (m == "ss")
+  {
+ ##Null
+      load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_IT_",m,".RData"))
+  Itho_group_SCD_null <- mean_SCD_null
+  Itho_global_SCD_null <- SCD_mimic_null
+  rm(mean_SCD_null, SCD_mimic_null, SCD_no_mimic_null)
+
+##Obs
+  
+  Itho_SCD_vec <- c()
+  vec_counter <- 0
+  list_OMU_Itho <- list_OMU_HeIt[list_OMU_HeIt$tribe=="ITHO",] # Extract Itho OMU only
+
+
+# Extract SCD values for pairs of comimetic Itho only
+  for (i in 1:nrow(list_OMU_Itho))
+  {
+    for (j in 1:nrow(list_OMU_Itho))
+    {
+      if (i != j && list_OMU_Itho$Ring[i] == list_OMU_Itho$Ring[j])
+      {
+        ref_1 <- as.numeric(rownames(list_OMU_Itho[i, ]))
+        ref_2 <- as.numeric(rownames(list_OMU_Itho[j, ]))
+        SCD_ref <- Schoener_dist_matrix[ref_1, ref_2]
+        vec_counter <- vec_counter + 1
+        Itho_SCD_vec[vec_counter] <- SCD_ref
+      }
+    }
+  }
+  Itho_global_SCD_obs <- mean(Itho_SCD_vec)
+  Itho_group_SCD_obs <- mean_SCD[str_detect(names(mean_SCD), "ITHO$")]
+  
+    
+    
+    
+  }
+  
+  ## Inter-tribe outputs
+  
+  # Load mean SCD obs values for all pairs, comimics, and non comimics for shared rings
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/All_shared_rings_Global_SCD_HeIt_OMU_",m,".RData")) 
+  # Global_mean_SCD, Global_mimic_BOTH_mean_SCD, Global_mimic_INTER_mean_SCD, Global_no.mimic_mean_SCD
+  
+  Inter_global_SCD_obs <- Global_mimic_INTER_mean_SCD
+  # Both_global_SCD_obs <- Global_mimic_BOTH_mean_SCD
+  rm(Global_no.mimic_mean_SCD, Global_mean_SCD)
+  
+
+  # Load mean SCD for shared rings, across inter-tribes pairs only (INTER)
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/mean_SCD_HI.INTER_HeIt_OMU_",m,".RData")) # Save final vector with mean SCD values per ring
+  Inter_group_SCD_obs <- mean_SCD_HI_INTER
+  rm(mean_SCD_HI_INTER)
+  
+  # Load mean SCD obs per mimetic groups (groups x tribes)
+  load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/mean_SCD_HeIt_OMU_",m,".RData")) # Save final vector with mean SCD values per ring
+  All_ring.tribes_group_SCD_obs <- mean_SCD
+  rm(mean_SCD)
+  Shared_groups <- str_remove(string = names(Inter_group_SCD_obs), pattern = "\\..*")
+  Shared_groups_match <- str_detect(string = names(All_ring.tribes_group_SCD_obs), pattern = paste0(Shared_groups, collapse = "|"))
+  Per_tribes_shared_group_SCD_obs <- All_ring.tribes_group_SCD_obs[Shared_groups_match]
+  
+  # Load null data from permutation: all comimics, and per mimetic groups for INTER pairs
+  load(file = paste0("../outputs/Community_Structure/Permutations/All_simul_mean_SCD_OMU_HEIT.INTER_",m,".RData"))
+  # mean_SCD_INTER_null, SCD_mimic_null.INTER
+  Inter_group_SCD_null <- mean_SCD_INTER_null
+  Inter_global_SCD_null <- SCD_mimic_null.INTER
+  rm(mean_SCD_INTER_null, SCD_mimic_null.INTER)
+  
+  
+  ##### 2/ Extract summary tables for global tests #####
+  
+  ### 2.1/ For global tests ####
+  
+  ## Heliconiini
+  
+  # Load summary table to extract total nb of pairs
+  # Helico_group_SCD_summary_table <- read.csv2(file = paste0("../tables/SCD_ring_summary_table_OMU_",m,".csv"))
+  Helico_group_SCD_summary_table <- read.xlsx(xlsxFile = paste0("../tables/BC_ring_summary_table_OMU_",m,".xlsx"))
+  
+  Helico_global_N_pairs <- sum(as.numeric(Helico_group_SCD_summary_table$N_pairs)) ; Helico_global_N_pairs
+  
+  Helico_global_SCD_obs
+  Helico_global_SCD_null
+  Helico_global_SCD_dist <- c(Helico_global_SCD_obs, Helico_global_SCD_null)
+  
+  Helico_global_SCD_Q50 <- median(Helico_global_SCD_dist) ; Helico_global_SCD_Q50
+  Helico_global_SCD_Q5 <- quantile(Helico_global_SCD_dist, 0.05) ; Helico_global_SCD_Q5
+  Helico_global_SCD_p_value <- round(ecdf(x = Helico_global_SCD_dist)(Helico_global_SCD_obs), 3) ; Helico_global_SCD_p_value
+  
+  Helico_global_SCD_summary_df <- data.frame(Tribe = "Heliconiini",
+                                            N_pairs = Helico_global_N_pairs,
+                                            SCD_obs = round(Helico_global_SCD_obs, 3),
+                                            SCD_Q50 = round(Helico_global_SCD_Q50, 3),
+                                            SCD_Q5 = round(Helico_global_SCD_Q5, 3),
+                                            p_value = round(Helico_global_SCD_p_value, 3)
+  )
+  Helico_global_SCD_summary_df
+  
+  ## Ithomiini
+  
+  if (m == "ss")
+  {
+    # Load summary table to extract total nb of pairs
+    load(file = paste0("../Ithomiini/BC_ring_summary_table.Rdata"))
+    Itho_group_SCD_summary_table <- BC_ring_summary_table
+    Itho_global_N_pairs <- sum(Itho_group_SCD_summary_table$N_pairs, na.rm = T) ; Itho_global_N_pairs
+    
+    Itho_global_SCD_obs
+    Itho_global_SCD_null
+    Itho_global_SCD_dist <- Itho_global_SCD_null
+    Itho_global_SCD_dist[1] <- Itho_global_SCD_obs
+    
+    Itho_global_SCD_Q50 <- median(Itho_global_SCD_dist) ; Itho_global_SCD_Q50
+    Itho_global_SCD_Q5 <- quantile(Itho_global_SCD_dist, 0.05) ; Itho_global_SCD_Q5
+    Itho_global_SCD_p_value <- round(ecdf(x = Itho_global_SCD_dist)(Itho_global_SCD_obs), 3) ; Itho_global_SCD_p_value
+    
+    Itho_global_SCD_summary_df <- data.frame(Tribe = "Ithomiini",
+                                            N_pairs = Itho_global_N_pairs,
+                                            SCD_obs = round(Itho_global_SCD_obs, 3),
+                                            SCD_Q50 = round(Itho_global_SCD_Q50, 3),
+                                            SCD_Q5 = round(Itho_global_SCD_Q5, 3),
+                                            p_value = round(Itho_global_SCD_p_value, 3)
+    )
+    Itho_global_SCD_summary_df
+  } else {
+    Itho_global_SCD_summary_df <- data.frame(Tribe = "Ithomiini",
+                                            N_pairs = NA,
+                                            SCD_obs = NA,
+                                            SCD_Q50 = NA,
+                                            SCD_Q5 = NA,
+                                            p_value = NA)
+  }
+  
+  ## Inter
+  
+  # # Load previous summary table
+  # load(file = paste0( "../outputs/Community_Structure/SchoenerD/IthoVsHelicoSCD_ring_summary_table_HeIt.Rdata"))
+  # SCD_ring_summary_table
+  # 
+  # # Load summary table to extract total nb of pairs
+  # Inter_global_SCD_summary_df <- SCD_ring_summary_table[SCD_ring_summary_table$tribe == "INTER", ]
+  # Inter_global_N_pairs <- sum(Inter_global_SCD_summary_df$N_pairs, na.rm = T) ; Inter_global_N_pairs
+  
+  # Extract number of pairs from pair matrices
+  Inter_group_N_pairs_list <- NA
+  # Both_group_N_pairs_list <- NA
+  # Loop per shared rings
+  for (i in seq_along(Shared_groups))
+  {
+    shared_group_i <- Shared_groups[i]
+    
+    load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",shared_group_i,".INTER_HeIt_OMU_",m,".RData"))
+    Inter_group_N_pairs_list[i] <- ncol(mat.index.INTER)
+    
+    # load(file = paste0("../outputs/Community_Structure/SchoenerD/IthoVSHelico/mat.index.HI.",shared_group_i,".BOTH_HeIt_OMU_",m,".RData"))
+    # Both_group_N_pairs_list[i] <- ncol(mat.index)
+  }
+  # Assign names of shared rings
+  names(Inter_group_N_pairs_list) <- paste0(Shared_groups,".INTER") ; Inter_group_N_pairs_list
+  # names(Both_group_N_pairs_list) <- paste0(Shared_groups,".BOTH") ; Both_group_N_pairs_list
+  
+  # Compute sum across shared rings
+  Inter_global_N_pairs <- sum(Inter_group_N_pairs_list, na.rm = T) ; Inter_global_N_pairs
+  # Both_global_N_pairs <- sum(Both_group_N_pairs_list, na.rm = T) ; Both_global_N_pairs
+    
+  # Merge observed and null data to compute summary stats
+  Inter_global_SCD_obs
+  Inter_global_SCD_null
+  Inter_global_SCD_dist <- c(Inter_global_SCD_obs, Inter_global_SCD_null)
+  
+  Inter_global_SCD_Q50 <- median(Inter_global_SCD_dist) ; Inter_global_SCD_Q50
+  Inter_global_SCD_Q5 <- quantile(Inter_global_SCD_dist, 0.05) ; Inter_global_SCD_Q5
+  Inter_global_SCD_p_value <- round(ecdf(x = Inter_global_SCD_dist)(Inter_global_SCD_obs), 3) ; Inter_global_SCD_p_value
+  
+  Inter_global_SCD_summary_df <- data.frame(Tribe = "Inter-tribe",
+                                           N_pairs = Inter_global_N_pairs,
+                                           SCD_obs = round(Inter_global_SCD_obs, 3),
+                                           SCD_Q50 = round(Inter_global_SCD_Q50, 3),
+                                           SCD_Q5 = round(Inter_global_SCD_Q5, 3),
+                                           p_value = round(Inter_global_SCD_p_value, 3)
+  )
+  Inter_global_SCD_summary_df
+  
+  
+  # ## Both
+  # 
+
+  
+  
+  ## Merge all groups
+  
+  global_tests_SCD_summary_df <- rbind(Helico_global_SCD_summary_df, Itho_global_SCD_summary_df, Inter_global_SCD_summary_df)
+  row.names(global_tests_SCD_summary_df) <- NULL
+  global_tests_SCD_summary_df
+  
+  saveRDS(global_tests_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/IthoVsHelico/global_tests_SCD_summary_df_",m,".rds"))
+  
+  
+  ##### 3/ Plot global test histograms ####
+  
+  ### 3.1/ Function to plot histograms ####
+  
+  plot_histogram_perm_test <- function(SCD_obs, SCD_null,
+                                       N_pairs,
+                                       title, cex_title = 1.3,
+                                       cex_axis = 1.5, cex_lab = 1.6, cex_legend = 1.4,
+                                       breaks = 30,
+                                       arrow_btm = 5, arrow_top = 80, arrow_adjust = 0,
+                                       inset_Q = c(0.02, 0.10),
+                                       inset_obs = c(0.02, 0.30),
+                                       panel_letter = "", cex_panel_letter = 2.0)
+  {
+    
+    full_dist <- c(SCD_obs, SCD_null)
+    
+    # Extract Q stats and p-value
+    SCD_Q50 <- median(full_dist)
+    SCD_Q5 <- quantile(full_dist, 0.05)
+    SCD_p_value <- round(ecdf(x = full_dist)(SCD_obs), 3)
+    
+    hist(full_dist,
+         breaks = breaks, freq = TRUE, col = "gray", 
+         main = title, 
+         xlab = expression(paste("Mean Bray-Curtis dissimilarities", sep = "")),
+         cex.axis = cex_axis, cex.lab = cex_lab, cex.main = cex_title, lwd = 2)
+    arrows(x0 = SCD_obs + arrow_adjust, y0 = arrow_top, x1 = SCD_obs + arrow_adjust, y1 = arrow_btm, length = 0.1, lwd = 3)
+    abline(v = SCD_Q50, lty = 2, lwd = 2)
+    abline(v = SCD_Q5, lty = 2, lwd = 2, col = "red")
+    
+    # Insert quantiles legend
+    legend(legend = c(paste0("Median = ", format(round(SCD_Q50, 3), nsmall = 3)), 
+                      paste0("Q5% = ", format(round(SCD_Q5, 3), nsmall = 3))), 
+           x = "topleft", inset = inset_Q, y.intersp = 1.2, lty = 2 , lwd = 2, col = c("black", "red"), cex = cex_legend, bty ="n")
+    
+    # Insert legend
+    legend(legend = c(paste0("SCD obs = ", format(round(SCD_obs, 3), nsmall = 3)),
+                      paste0("N pairs = ", N_pairs),
+                      paste0("p ≤ ", format(round(SCD_p_value, 3), nsmall = 3))), 
+           x = "topleft", inset = inset_obs, y.intersp = 1.1, cex = cex_legend, bty ="n")
+    
+    
+    # Add panel legend
+    legend(legend = panel_letter, text.font = 2,
+           x = "topright", inset = c(0.00, 0.00), xjust = 0.5,
+           cex = cex_panel_letter, bty ="n")
+    
+  }
+  
+  
+  ### 3.2/ Heliconiini ####
+  
+  Helico_global_SCD_obs
+  Helico_global_SCD_null
+  
+  pdf(file = paste0("../outputs/Community_Structure/SchoenerD/Helico_global_SCD_histo_",m,".pdf"), width = 8, height = 6)
+  initial_margins <- par()$mar 
+  par(mar = c(5, 5, 4, 2)) # bltr
+  plot_histogram_perm_test(SCD_obs = Helico_global_SCD_obs,
+                           SCD_null = Helico_global_SCD_null,
+                           N_pairs = Helico_global_N_pairs,
+                           title = "Heliconiini",
+                           cex_title = 2.0,
+                           inset_Q = c(0.02, 0.00),
+                           inset_obs = c(-0.02, 0.25),
+                           arrow_top = 80,
+                           arrow_adjust = 0.0015)
+  par(mar = initial_margins)
+  dev.off()
+  
+  
+  ### 3.3/ Ithomiini ####
+  
+  if (m == "ss")
+  {
+    Itho_global_SCD_obs
+    Itho_global_SCD_null_999 <- Itho_global_SCD_null[1:999]
+    
+    pdf(file = paste0("../outputs/Community_Structure/SchoenerD/Itho_global_SCD_histo_",m,".pdf"), width = 8, height = 6)
+    initial_margins <- par()$mar 
+    par(mar = c(5, 5, 4, 2)) # bltr
+    plot_histogram_perm_test(SCD_obs = Itho_global_SCD_obs,
+                             SCD_null = Itho_global_SCD_null_999,
+                             N_pairs = Itho_global_N_pairs,
+                             title = "Ithomiini",
+                             cex_title = 2.0,
+                             inset_Q = c(0.02, 0.00),
+                             inset_obs = c(-0.02, 0.25),
+                             arrow_btm = 10,
+                             arrow_top = 165,
+                             arrow_adjust = 0.0007)
+    par(mar = initial_margins)
+    dev.off()
+  }
+  
+  ### 3.4/ Inter-tribe ####
+  
+  Inter_global_SCD_obs
+  Inter_global_SCD_null
+  
+  pdf(file = paste0("../outputs/Community_Structure/SchoenerD/Inter_global_SCD_histo_",m,".pdf"), width = 8, height = 6)
+  initial_margins <- par()$mar 
+  par(mar = c(5, 5, 4, 2)) # bltr
+  plot_histogram_perm_test(SCD_obs = Inter_global_SCD_obs,
+                           SCD_null = Inter_global_SCD_null,
+                           N_pairs = Inter_global_N_pairs,
+                           title = "Inter-tribe",
+                           cex_title = 2.0,
+                           arrow_top = 110,
+                           inset_Q = c(0.02, 0.00),
+                           inset_obs = c(-0.02, 0.25),
+                           arrow_adjust = 0.001)
+  par(mar = initial_margins)
+  dev.off()
+  
+  
+  ##### 4/ Extract summary tables per mimetic rings ####
+  
+  # # Load previous summary table
+  # load(file = paste0( "../outputs/Community_Structure/SchoenerD/IthoVsHelicoSCD_ring_summary_table_HeIt.Rdata"))
+  # SCD_ring_summary_table
+  
+  # Function to compute p_values as quantile from a null distribution
+  compute_p_value <- function (x) 
+  { 
+    test <- any(is.na(x))
+    if(test)
+    { 
+      y <- NA 
+    } else { 
+      y <- round(ecdf(x = x)(x[1]), 3) 
+    } 
+    return(y)
+  }
+  
+  # Function to assign significativity level based on p_values
+  assign_signif_lvl <- function (x) 
+  { 
+    signifs <- rep("", length(x))
+    
+    signifs[x < 0.05] <- "*"
+    signifs[x < 0.01] <- "**"
+    signifs[x <= 0.001] <- "***"
+    
+    signifs[is.na(x)] <- NA
+    
+    return(signifs)
+  }
+  
+  ### 4.1/ Heliconiini ####
+  
+  # # Load summary table
+  Previous_summary_table <- read.xlsx(xlsxFile = paste0("../tables/BC_ring_summary_table_OMU_",m,".xlsx"))
+  names(Previous_summary_table)[2] <- "Phenotypic_group"
+  # 
+  # Helico_group_SCD_obs
+  # Helico_group_SCD_null
+  
+  Helico_group_SCD_dist <- rbind(Helico_group_SCD_obs, Helico_group_SCD_null) ; 
+  
+  Helico_group_SCD_Q50 <- apply(X = Helico_group_SCD_dist, MARGIN = 2, FUN = median, na.rm = T) ; Helico_group_SCD_Q50
+  Helico_group_SCD_Q5 <- apply(X = Helico_group_SCD_dist, MARGIN = 2, FUN = quantile, probs =  0.05, na.rm = T) ; Helico_group_SCD_Q5
+  Helico_group_SCD_p_value <- apply(X = Helico_group_SCD_dist, MARGIN = 2, FUN = compute_p_value) ; Helico_group_SCD_p_value
+  Helico_group_SCD_signif <- assign_signif_lvl(Helico_group_SCD_p_value) ; Helico_group_SCD_signif
+  
+  names(Helico_group_SCD_obs) <- str_remove(names(Helico_group_SCD_obs), "[.]HELICO")
+  
+  # # Get nb of units and pairs from previous summary table
+  # Previous_summary_table <- Helico_group_SCD_summary_table[SCD_ring_summary_table$tribe == "HELICONIINI", ]
+  # Previous_summary_table$MIMETIC_GROUP <- str_remove(string = Previous_summary_table$ring, pattern = ".HELICO")
+  
+  Helico_group_N_units <- as.numeric(Previous_summary_table$N_units)
+  Helico_group_N_units <- Helico_group_N_units[match(x = names(Helico_group_SCD_obs), table = Previous_summary_table$Phenotypic_group)]
+  Helico_group_N_pairs <- as.numeric(Previous_summary_table$N_pairs)
+  Helico_group_N_pairs <- Helico_group_N_pairs[match(x = names(Helico_group_SCD_obs), table = Previous_summary_table$Phenotypic_group)]
+  
+  # Bind everything
+  Helico_group_SCD_summary_df <- cbind(as.numeric(Helico_group_N_units), as.numeric(Helico_group_N_pairs), as.numeric(round(Helico_group_SCD_obs, 3)), as.numeric(round(Helico_group_SCD_Q50, 3)), as.numeric(round(Helico_group_SCD_Q5, 3)), as.numeric(round(Helico_group_SCD_p_value, 3)), Helico_group_SCD_signif)
+  Phenotypic_group <- names(Helico_group_SCD_obs)
+  Helico_group_SCD_summary_df <- as.data.frame(cbind(Phenotypic_group, Helico_group_SCD_summary_df))
+  names(Helico_group_SCD_summary_df) <- c("Phenotypic_group", "N_units", "N_pairs", "SCD_obs", "SCD_Q50", "SCD_Q5", "p_value", "signif_lvl")
+  
+  # Add tribe
+  Helico_group_SCD_summary_df$Tribe <- "Heliconiini"
+  Helico_group_SCD_summary_df <- Helico_group_SCD_summary_df %>% 
+    dplyr::select(Tribe, Phenotypic_group, N_units, N_pairs, SCD_obs, SCD_Q50, SCD_Q5, p_value, signif_lvl)
+  Helico_group_SCD_summary_df
+  
+  # # Update mimetic group names
+  # Old_names <- str_replace(string = Mimetic_classification_update$`Initial name`, pattern = " ", replacement = "\\.")
+  # Old_names <- str_replace(string = Old_names, pattern = "-", replacement = "\\.")
+  # Mimetic_classification_update$Old_names <- Old_names
+  # 
+  # Helico_group_SCD_summary_df <- left_join(x = Helico_group_SCD_summary_df,
+  #                                         y = Mimetic_classification_update[, c("Old_names", "New name")],
+  #                                         by = c("MIMETIC_GROUP" = "Old_names"))
+  # 
+  # Helico_group_SCD_summary_df <- Helico_group_SCD_summary_df %>% 
+  #   mutate(MIMETIC_GROUP = `New name`) %>%
+  #   dplyr::select(Tribe, MIMETIC_GROUP, N_units, N_pairs, SCD_obs, SCD_Q50, SCD_Q5, p_value, signif_lvl) %>% 
+  #   arrange(MIMETIC_GROUP)
+  
+  Helico_group_SCD_summary_df <- Helico_group_SCD_summary_df %>% 
+    arrange(Phenotypic_group)
+  
+  saveRDS(Helico_group_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/Helico_group_SCD_summary_df_",m,".rds"))
+  
+  
+  ### 4.2/ Ithomiini ####
+  
+  if (m == "ss")
+  {
+    Itho_group_SCD_obs
+    Itho_group_SCD_null
+    
+    Itho_group_SCD_dist <- rbind(Itho_group_SCD_obs, Itho_group_SCD_null)
+    Itho_group_SCD_dist <- Itho_group_SCD_dist[-1001, ]
+    
+    Itho_group_SCD_Q50 <- apply(X = Itho_group_SCD_dist, MARGIN = 2, FUN = median) ; Itho_group_SCD_Q50
+    Itho_group_SCD_Q5 <- apply(X = Itho_group_SCD_dist, MARGIN = 2, FUN = quantile, probs =  0.05, na.rm = T) ; Itho_group_SCD_Q5
+    Itho_group_SCD_p_value <- apply(X = Itho_group_SCD_dist, MARGIN = 2, FUN = compute_p_value) ; Itho_group_SCD_p_value
+    Itho_group_SCD_signif <- assign_signif_lvl(Itho_group_SCD_p_value) ; Itho_group_SCD_signif
+    
+    # Get nb of units and pairs from previous summary table
+    load(file = paste0("../Ithomiini/BC_ring_summary_table.Rdata"))
+    Previous_summary_table <- BC_ring_summary_table
+    
+  names(Itho_group_SCD_obs) <- str_remove(names(Itho_group_SCD_obs), "[.]ITHO")
+    
+    
+    Itho_group_N_units <- Previous_summary_table$N_units
+    Itho_group_N_units <- Itho_group_N_units[match(x = Previous_summary_table$ring, table = names(Itho_group_SCD_obs))]
+    Itho_group_N_pairs <- Previous_summary_table$N_pairs
+    Itho_group_N_pairs <- Itho_group_N_pairs[match(x = Previous_summary_table$ring, table = names(Itho_group_SCD_obs))]
+    
+    # Bind everything
+    Itho_group_SCD_summary_df <- cbind(as.numeric(Itho_group_N_units), as.numeric(Itho_group_N_pairs), as.numeric(round(Itho_group_SCD_obs, 3)), as.numeric(round(Itho_group_SCD_Q50, 3)), as.numeric(round(Itho_group_SCD_Q5, 3)), as.numeric(round(Itho_group_SCD_p_value, 3)), Itho_group_SCD_signif)
+    Phenotypic_group <- names(Itho_group_SCD_obs)
+    Itho_group_SCD_summary_df <- as.data.frame(cbind(Phenotypic_group, Itho_group_SCD_summary_df))
+    names(Itho_group_SCD_summary_df) <- c("Phenotypic_group", "N_units", "N_pairs", "SCD_obs", "SCD_Q50", "SCD_Q5", "p_value", "signif_lvl")
+    
+
+    # Add tribe
+    Itho_group_SCD_summary_df$Tribe <- "Ithomiini"
+    Itho_group_SCD_summary_df <- Itho_group_SCD_summary_df %>% 
+      dplyr::select(Tribe, Phenotypic_group, N_units, N_pairs, SCD_obs, SCD_Q50, SCD_Q5, p_value, signif_lvl) %>% 
+      arrange(Phenotypic_group)
+    
+    Itho_group_SCD_summary_df
+    
+    saveRDS(Itho_group_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/Itho_group_SCD_summary_df_",m,".rds"))
+  }
+  
+  ### 4.3/ Inter-tribe ####
+  
+  Inter_group_SCD_obs
+  Inter_group_SCD_null
+  
+  Inter_group_SCD_dist <- rbind(Inter_group_SCD_obs, Inter_group_SCD_null) ; 
+  
+  Inter_group_SCD_Q50 <- apply(X = Inter_group_SCD_dist, MARGIN = 2, FUN = median) ; Inter_group_SCD_Q50
+  Inter_group_SCD_Q5 <- apply(X = Inter_group_SCD_dist, MARGIN = 2, FUN = quantile, probs =  0.05, na.rm = T) ; Inter_group_SCD_Q5
+  Inter_group_SCD_p_value <- apply(X = Inter_group_SCD_dist, MARGIN = 2, FUN = compute_p_value) ; Inter_group_SCD_p_value
+  Inter_group_SCD_signif <- assign_signif_lvl(Inter_group_SCD_p_value) ; Inter_group_SCD_signif
+  
+  # Get nb of pairs from above computations
+  Inter_group_N_pairs <- Inter_group_N_pairs_list
+  Inter_group_N_pairs <- Inter_group_N_pairs[match(x = names(Inter_group_SCD_obs), table = names(Inter_group_N_pairs_list))]
+  
+  # Get number of units from list of OMUs
+  COMIM_rings <- readRDS(file = paste0("../Ithomiini/COMIM_rings_",m,".rds"))
+  list_OMU_HeIt <- readRDS(file = paste0("../input_data/Species_data/list_OMU_HeIt_",m,".RDS"))
+  
+  Inter_group_N_units <- NA
+  for (i in seq_along(COMIM_rings$Ring))
+  {
+    Ring_HI <- COMIM_rings$Ring[i]
+    Inter_group_N_units[i] <- sum(list_OMU_HeIt$Ring == Ring_HI)
+  }
+  names(Inter_group_N_units) <- COMIM_rings$Ring
+    
+  Inter_group_N_units <- Inter_group_N_units[match(x = str_remove(names(Inter_group_SCD_obs), pattern = "\\.INTER"), table = names(Inter_group_N_units))]
+   
+  # Bind everything
+  Inter_group_SCD_summary_df <- cbind(as.numeric(Inter_group_N_units), as.numeric(Inter_group_N_pairs), as.numeric(round(Inter_group_SCD_obs, 3)), as.numeric(round(Inter_group_SCD_Q50, 3)), as.numeric(round(Inter_group_SCD_Q5, 3)), as.numeric(round(Inter_group_SCD_p_value, 3)), Inter_group_SCD_signif)
+  Phenotypic_group <- str_remove(names(Inter_group_SCD_obs), pattern = "\\.INTER")
+  Inter_group_SCD_summary_df <- as.data.frame(cbind(Phenotypic_group, Inter_group_SCD_summary_df))
+  names(Inter_group_SCD_summary_df) <- c("Phenotypic_group", "N_units", "N_pairs", "SCD_obs", "SCD_Q50", "SCD_Q5", "p_value", "signif_lvl")
+  
+  # Add tribe
+  Inter_group_SCD_summary_df$Tribe <- "Inter-tribe"
+  Inter_group_SCD_summary_df <- Inter_group_SCD_summary_df %>% 
+    dplyr::select(Tribe, Phenotypic_group, N_units, N_pairs, SCD_obs, SCD_Q50, SCD_Q5, p_value, signif_lvl) %>% 
+    arrange(Phenotypic_group)
+  
+  Inter_group_SCD_summary_df
+  
+  saveRDS(Inter_group_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/Inter_group_SCD_summary_df_",m,".rds"))
+  
+  
+  ### 4.4/ Bind all tribes ####
+  
+  Helico_group_SCD_summary_df <- readRDS(file = paste0("../outputs/Community_Structure/SchoenerD/Helico_group_SCD_summary_df_",m,".rds"))
+  Inter_group_SCD_summary_df <- readRDS(file = paste0("../outputs/Community_Structure/SchoenerD/Inter_group_SCD_summary_df_",m,".rds"))
+  
+  if (m == "ss")
+  {
+    Itho_group_SCD_summary_df <- readRDS(file = paste0("../outputs/Community_Structure/SchoenerD/Itho_group_SCD_summary_df_",m,".rds"))
+    all_groups_SCD_summary_df <- rbind(Helico_group_SCD_summary_df, Inter_group_SCD_summary_df, Itho_group_SCD_summary_df)
+  } else {
+    all_groups_SCD_summary_df <- rbind(Helico_group_SCD_summary_df, Inter_group_SCD_summary_df)
+  }
+  
+  saveRDS(all_groups_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/all_groups_SCD_summary_df_",m,".rds"))
+  write.xlsx(x = all_groups_SCD_summary_df, file = paste0("../outputs/Community_Structure/SchoenerD/all_groups_SCD_summary_df_",m,".xlsx"))
+  
+}
+
+
+
+```
+

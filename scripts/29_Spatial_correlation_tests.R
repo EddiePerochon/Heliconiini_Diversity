@@ -42,7 +42,7 @@ library(cvequality) # To test for differences in CV
 
 Helico_sp_richness <- readAll(readRDS(file = paste0("./outputs/Indices_maps/tot.sp.richness_Jaccard.80.rds")))
 Helico_sp_mean_geo_rarity <- readAll(readRDS(file = "./outputs/Indices_maps/sp.mean.rarity_Leroy_Jaccard.80_contrasted.rds"))   # Leroy's weighting
-Helico_Faith_PD <- readAll(readRDS(file = "./outputs/Indices_Maps/PD.raster_Jaccard.80.rds"))
+Helico_Faith_PD <- readAll(readRDS(file = "./outputs/Indices_Maps/SESPD.raster_Jaccard.80.rds"))
 
 Helico_phenotypic_richness <- readAll(readRDS(file = "./outputs/Indices_maps/ring.richness_Jaccard_ss.80.rds"))
 Helico_mean_phenotypic_geo_rarity <- readAll(readRDS(file = "./outputs/Indices_maps/ring.mean.rarity_Leroy_Jaccard_ss.80.rds"))    # Leroy's weighting
@@ -57,7 +57,7 @@ plot(Helico_all_indices)
 
 Itho_sp_richness <- readRDS(file = paste0("./outputs/Ithomiini_index_maps/tot.sp.richness_Jaccard.80.rds"))
 Itho_sp_mean_geo_rarity <- readRDS(file = "./outputs/Ithomiini_index_maps/sp.mean.rarity_Leroy_Jaccard.80.rds")   # Leroy's weighting
-Itho_Faith_PD <- readRDS(file = "./outputs/Ithomiini_index_maps/PD.raster_Jaccard.80.rds")
+Itho_Faith_PD <- readRDS(file = "./outputs/Indices_maps/SESPD_Ith.raster_Jaccard.80.rds")
 
 Itho_phenotypic_richness <- readRDS(file = paste0("./outputs/Ithomiini_index_maps/ring.richness_Jaccard.80.rds"))
 Itho_mean_phenotypic_geo_rarity <- readRDS(file = "./outputs/Ithomiini_index_maps/ring.mean.rarity_Leroy_Jaccard.80.rds")    # Leroy's weighting
