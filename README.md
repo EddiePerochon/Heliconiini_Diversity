@@ -82,7 +82,7 @@ The phenotypic classification of heliconiine subspecies defined for this study i
 The distribution maps generated throughout the analyses are made publicly available at [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10903661.svg)](https://doi.org/10.5281/zenodo.10903661)
 
 The folders with all files generated/used throughout the analyses are publicly available at 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14765685.svg)](https://doi.org/10.5281/zenodo.14765685)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17079696.svg)](https://doi.org/10.5281/zenodo.17079696)
 
 The R scripts and input data used throughout the analyses are publicly available at 
 [github.com/EddiePerochon/Heliconiini_Diversity](https://github.com/EddiePerochon/Heliconiini_Diversity)
