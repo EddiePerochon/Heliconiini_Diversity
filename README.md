@@ -6,7 +6,7 @@
 This repository contains the code and data used to carry out analyses
 for this research article:
 
-**"Pérochon et al., 2025 - Müllerian Mimicry in Neotropical Butterflies: One Mimicry Ring to Bring Them All and in the Jungle Bind Them. Global Ecology and Biogeography, 34(9): e70127”** https://doi.org/10.1111/geb.70127[https://doi.org/10.1111/geb.70127.].
+**"Pérochon et al., 2025 - Müllerian Mimicry in Neotropical Butterflies: One Mimicry Ring to Bring Them All and in the Jungle Bind Them. Global Ecology and Biogeography, 34(9): e70127”** https://doi.org/10.1111/geb.70127.
 
 Müllerian mimicry is a remarkable example of convergent evolution driven
 by natural selection where coexisting prey species converge in their
